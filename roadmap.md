@@ -246,6 +246,110 @@ This is an IPC smoke path, not yet the complete hello-service/process-runtime
 milestone. Process lifecycle, capability handles and a separately started
 hello service remain required before Phase 2 is complete.
 
+### Phase 2 Implementation Record
+
+The current desktop reference implementation proves the following bounded
+path in `Zinux`:
+
+```text
+QEMU virt / EL1 kernel
+    -> VBAR_EL1 exception vector
+    -> eret to EL0 init entry
+    -> SVC IPC smoke request
+    -> EL1 handler validates EC=0x15 (AArch64 SVC from EL0)
+    -> deterministic IPC response
+    -> SVC exit
+    -> semihosting QEMU exit
+```
+
+Current deterministic serial output is:
+
+```text
+Zinux ARM64 boot OK
+zinux>
+Zinux init EL0
+IPC request/response OK
+Zinux init exit
+```
+
+The current smoke ABI is deliberately temporary and minimal:
+
+| Item | Current rule |
+|---|---|
+| Guest mode | EL0t for init; EL1h for kernel/exception handling |
+| Entry | `aarch64_init_entry` in the embedded ARM64 ELF |
+| Trap | `svc #0` from EL0 |
+| Dispatch input | ESR_EL1, ELR_EL1 and the current syscall register |
+| IPC operation | `SYS_IPC_SMOKE = 0` |
+| Exit operation | `SYS_EXIT = 1` |
+| IPC request | deterministic `IPC1` marker value |
+| IPC response | deterministic `IPC2` marker value |
+| Exit | semihosting `SYS_EXIT`, status 0 |
+| Ownership | kernel owns the vector and UART; init owns the request sequence |
+
+This ABI is not yet the final Zinux process ABI. In particular, the current
+vector saves only the registers needed by the smoke path. A service switch
+must not be built on that shortcut.
+
+### Phase 2 Next Gates
+
+Implement the remaining work in this order:
+
+1. Define an explicit `Aarch64ExceptionFrame` layout containing x0-x30,
+   ESR_EL1, ELR_EL1 and SPSR_EL1. The assembly offsets and the Zig `extern`
+   struct must be tested against each other.
+2. Preserve and restore all user registers around the EL0 SVC path. The
+   handler return value must be explicitly defined as x0; all other registers
+   must return from the saved frame.
+3. Define syscall dispatch independently from compiler scratch-register
+   behavior. The syscall number must have one documented location and one
+   documented clobber rule.
+4. Add `START_HELLO` and `HELLO_DONE` operations. Init must save its ELR/SP
+   state, enter a separate EL0 hello-service entry and return to init only
+   after the service acknowledges completion.
+5. Add a minimal process record containing pid, state, EL0 entry, stack and
+   parent. The first state machine only needs `READY`, `RUNNING`, `WAITING`
+   and `EXITED`; no scheduler policy is required yet.
+6. Add a capability-backed IPC port rather than passing a raw kernel-global
+   port identifier. Invalid handles, wrong rights and oversized messages must
+   fail closed.
+7. Add persistent-storage and monotonic-clock interfaces as stubs with
+   deterministic negative tests before `gringotsd` is attached.
+
+### Phase 2 Gate Commands
+
+Every Phase 2 change must keep these commands passing:
+
+```text
+Zinux/zig build test
+Zinux/zig build
+Zinux/zig build aarch64
+Zinux/zig build aarch64-verify
+Zinux/zig build aarch64-run
+Gringots/zig build test
+```
+
+`aarch64-run` must continue to verify all of these markers, not only the
+kernel boot marker:
+
+```text
+Zinux ARM64 boot OK
+zinux>
+Zinux init EL0
+IPC request/response OK
+Zinux init exit
+```
+
+### Known Failed Experiment
+
+A first hello-service experiment attempted to change `SP_EL0` and `ELR_EL1`
+from the small SVC handler while restoring only a partial register set. Under
+QEMU this produced nondeterministic syscall dispatch and was removed. The
+experiment is retained as design evidence: service switching is blocked until
+the full exception-frame ABI and register restoration tests exist.
+
+No Android or Redmi Note 8 Pro test is allowed to bypass these desktop gates.
+
 Do not add a package ecosystem, shell features or desktop UI unless required
 by this milestone.
 
