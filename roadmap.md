@@ -353,6 +353,91 @@ No Android or Redmi Note 8 Pro test is allowed to bypass these desktop gates.
 Do not add a package ecosystem, shell features or desktop UI unless required
 by this milestone.
 
+# Security Boundaries and Threat Modeling
+
+**Objective:** Build security between Gringots and Zinux incrementally so that Gringots operates in a restricted environment, and the interface between the Android host and Zinux guest is clearly defined and testable.
+Security is not left until the end of the project, but its implementation must not halt the construction of the first functional ARM64 environment and Gringots system.
+
+---
+
+## Phase S1 – Threat Model and Trust Boundary Definition
+
+**Timeline:** Before locking the Gringots service and Android host interface.
+
+- Define trust boundaries between the Android host, Zinux kernel, Gringots service, and receiving device.
+- Document the threat model: What happens if the Android host, guest system, or Gringots service is compromised?
+- Define what data and operations the Android host is allowed to provide to Zinux.
+- Restrict Zinux and Gringots permissions to the essential.
+- Define which security features the virtual machine provides and which it does not guarantee.
+
+**Acceptance Criteria:** Threat model and trust boundaries are documented, and interface security requirements are defined.
+
+---
+## Phase S2 – Host-Guest Interface Protection
+
+**Timeline:** As part of the implementation of the Gringots service and host interface.
+
+- Define a restricted messaging protocol between the Android host and Zinux.
+- Allow only predefined operations, such as `SEND_FRAME`, `RECEIVE_FRAME`, `GET_STATUS`, and `GET_TIME`.
+- Validate message versions, lengths, and content before processing.
+- Set timeouts and error handling.
+- Prevent the Gringots service from having direct, unrestricted access to Android files, network, and JNI interfaces.
+- Keep private keys and their usage within Zinux. Keys are not transmitted via the host interface.
+
+**Acceptance Criteria:** The interface accepts only defined operations and rejects erroneous, oversized, or unknown messages in a controlled manner.
+
+---
+## Phase S3 – Zinux Isolation and Service Boundaries
+
+**Timeline:** Alongside ARM64 user space and Gringots service development.
+
+- Implement permission boundaries between processes and services.
+- Restrict Gringots service access to system resources.
+- Develop a capability-based IPC model and test its permission enforcement.
+- Ensure that service crashes do not unnecessarily compromise the rest of the system.
+- Test handling of invalid IPC requests and unauthorized resource requests.
+
+**Acceptance Criteria:** The Gringots service operates within its granted permissions, and unauthorized requests are rejected.
+
+---
+## Phase S4 – Message Authenticity and Replay Attack Prevention
+
+**Timeline:** As part of Gringots end-to-end testing.
+
+- Maintain verification of Gringots signatures and message authenticity at the receiving end.
+- Test the functionality of signature verification, message integrity, and replay attack prevention.
+- Ensure that an invalid or outdated message does not lead to an accepted acknowledgment.
+- Define how the state required for replay attack prevention persists across restarts.
+- Test that the host interface cannot bypass receiver verification.
+
+**Acceptance Criteria:** The receiver accepts only protocol-compliant, verified, and fresh messages.
+
+---
+## Phase S5 – Android Integration Security Testing
+
+**Timeline:** Before releasing the Android version.
+
+- Test host interface error conditions, malformed messages, and resource limits.
+- Test Zinux guest crashes, restarts, and recovery.
+- Ensure that permissions for access to location, audio, and wireless connections are requested in Android with user consent.
+- Ensure that security errors lead to a safe failure state and not unauthorized communication.
+- Document known limitations, especially that the virtual machine alone does not guarantee protection against a compromised Android host.
+
+**Acceptance Criteria:** Android integration security tests are passed, known limitations are documented, and error conditions are handled in a controlled manner.
+
+---
+## Security Progress Principle
+
+Security requirements progress in parallel with core development:
+
+1. First, boundaries and threat models.
+2. Then, a restricted and testable interface.
+3. Next, service isolation and message verification.
+4. Finally, Android integration security testing before release.
+
+This section complements the ARM64 user space, Gringots service, desktop integration, and Android host phases. It does not replace their functional acceptance criteria.
+
+
 ## Phase 3: Gringots as the First Zinux Service
 
 ### Objectives
