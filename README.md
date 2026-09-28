@@ -362,6 +362,23 @@ The reference implementation is written in:
 
 Zig 0.16
 
+Status (Phase 1 done, Phase 2 core done):
+
+* `PROTOCOL.md`, `SECURITY.md`, `THREAT_MODEL.md` — normative v1 spec
+* `src/` — `protocol` (framing/TLV/msg), `crypto` (Ed25519),
+  `identity` (ephemeral), `replay` (nonce cache), `location` (session)
+* CLI: `gringots keygen | send | decode | verify` (`zig build`)
+* Local transports: `broadcast | listen | relay | ble-encode | ble-decode`
+  (`src/transports/`: UDP broadcast, BLE chunk codec, mesh relay)
+* Audible fallback: `audio-send | audio-listen`
+  (`src/audio/`: FSK modem, RS(255,223), acoustic framing, WAV)
+* Device agent: `agent [--live]` (`src/agent/`: duty, consent,
+  location provider, service core) + C ABI `libgringots.a` (`src/ffi.zig`)
+* Tests: `zig build test` — golden vectors from PROTOCOL.md,
+  RFC 8032 Ed25519 vector, round-trip + tamper/expiry/replay/session
+  tests, decoder fuzz seeds (deep libfuzzer via `zig test -ffuzz`
+  on ELF/MachO; unsupported on Windows COFF in Zig 0.16)
+
 The implementation is intended to remain small enough for constrained civilian devices while supporting:
 
 * binary protocol encoding
@@ -449,31 +466,39 @@ Phase 2 — Zig 0.16 Reference Implementation
 
 Phase 3 — Local Communication
 
-* [ ]	Bluetooth LE
-* [ ]	Wi-Fi
-* [ ]	Wi-Fi Direct
-* [ ]	Local mesh
+* [x]	Bluetooth LE chunk codec (fragment/reassemble; radio needs platform APIs)
+* [x]	Wi-Fi via UDP broadcast `udp/4848` (`broadcast` / `listen`)
+* [x]	Wi-Fi Direct IP path via UDP (group formation stays an OS API)
+* [x]	Local mesh flooding relay with TTL + nonce dedupe (`relay`)
 
 Phase 4 — Audible Gringots
 
-* [ ]	Acoustic framing
-* [ ]	Error correction
-* [ ]	Short machine-readable packets
-* [ ]	Microphone decoder
-* [ ]	Speaker encoder
-* [ ]	Human-readable fallback
-* [ ]	Unknown-response handling
+* [x]	Acoustic framing (preamble + 32-bit sync + len + RS blocks)
+* [x]	Error correction (RS(255,223), 16 symbols/block)
+* [x]	Short machine-readable packets (≤3 blocks, FSK 1200/2400 @300 baud)
+* [x]	Microphone decoder via WAV (`audio-listen`)
+* [x]	Speaker encoder via WAV (`audio-send`, optional attention beeps)
+* [x]	Human-readable fallback (spoken sentence printed by CLI)
+* [x]	Unknown-response handling (NO SIGNAL is never an acknowledgement)
+
+Live microphone/speaker streaming needs platform audio APIs; WAV files
+are the device boundary in this phase.
 
 Phase 5 — Android
 
-* [ ]	Background service
-* [ ]	Bluetooth discovery
-* [ ]	Wi-Fi discovery
-* [ ]	Consent UI
-* [ ]	Location disclosure
-* [ ]	Safety sessions
-* [ ]	Audible fallback
-* [ ]	Battery-conscious operation
+Portable agent core done (`src/agent/` + `src/ffi.zig`, `libgringots.a`);
+native Android UI/service (Kotlin, BLE scan, fused location) is host work
+on top of the C ABI (`gringots_make_sos/verify/describe`).
+
+* [x]	Background service core (I/O-free `Service`: tick/onFrame/outbox)
+* [x]	Bluetooth discovery codec (Phase 3); OS scan stays platform-side
+* [x]	Wi-Fi discovery via UDP (Phase 3 `broadcast`/`listen`/`relay`)
+* [x]	Consent UI contract (explicit queue; CLI `agent --ask`, FFI decide)
+* [x]	Location disclosure (consent-gated, stale-fix refusal, TTL)
+* [x]	Safety sessions (single-session scope in agent)
+* [x]	Audible fallback (Phase 4 `audio-send`/`audio-listen`)
+* [x]	Battery-conscious operation (duty scheduler: interval, budget,
+  quiet hours, ACK cooldown, low-battery stretch)
 
 Phase 6 — Other Civilian Devices
 

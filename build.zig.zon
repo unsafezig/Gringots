@@ -1,0 +1,7 @@
+.{
+    .name = .gringots,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{""},
+    .fingerprint = 0xaa27ffa44dcb5140,
+}
