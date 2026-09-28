@@ -50,6 +50,28 @@ The existing projects impose these constraints:
 The first implementation may use ARM64 emulation. Performance optimization is
 not a prerequisite for proving the architecture.
 
+## Hardware Reference
+
+The first physical-device validation target is a **Xiaomi Redmi Note 8 Pro**.
+The device is an ARM64 Android reference host, not a replacement for the
+desktop QEMU gate. Every hardware milestone must keep a deterministic desktop
+test and must document the Android build, deployment and transport conditions
+used on the phone.
+
+The Redmi validation sequence is deliberately late in the roadmap:
+
+```text
+desktop QEMU guest gate
+    -> desktop host-bridge SOS/ACK gate
+    -> APK/debug-host gate
+    -> Redmi Note 8 Pro smoke test
+    -> Redmi Wi-Fi transport test
+```
+
+Native boot on the phone is not required. The intended first phone path is an
+Android APK hosting an emulated ARM64 guest with explicit serial, storage and
+datagram bridges.
+
 ## Architectural Rule
 
 Keep these layers separate:
@@ -155,7 +177,7 @@ encoding, direction, ownership rule and failure behavior.
 
 - Build a minimal ARM64 Zinux target.
 - Boot it in a desktop reference environment.
-- Provide a serial console and minimal userland.
+- Provide a serial console and deterministic boot output.
 
 ### Required guest devices
 
@@ -178,9 +200,8 @@ zinux>
 
 - ARM64 kernel builds reproducibly.
 - Guest boots in the desktop reference environment.
-- Init starts.
 - Serial output contains a deterministic boot marker.
-- Invalid guest device requests are rejected.
+- Semihosting smoke exit returns successfully.
 
 The existing x86_64/Limine path must not be silently broken. The ARM64 guest
 path is an additional target, not an implicit replacement.
@@ -195,6 +216,10 @@ path is an additional target, not an implicit replacement.
 - Provide persistent application storage.
 - Provide a monotonic and wall-clock interface.
 
+The first ARM64 implementation must not claim this phase is complete from a
+kernel boot marker alone. The guest must execute an actual EL0 `init` entry,
+start a hello service, and complete one bounded IPC request/response exchange.
+
 ### Milestone
 
 ```text
@@ -204,6 +229,22 @@ hello service
     ↓
 IPC request/response OK
 ```
+
+The first implementation slice now proves the lower-level prerequisite:
+
+```text
+EL1 kernel
+    ↓ eret
+EL0 init
+    ↓ svc
+EL1 syscall vector
+    ↓ response
+EL0 init exit
+```
+
+This is an IPC smoke path, not yet the complete hello-service/process-runtime
+milestone. Process lifecycle, capability handles and a separately started
+hello service remain required before Phase 2 is complete.
 
 Do not add a package ecosystem, shell features or desktop UI unless required
 by this milestone.

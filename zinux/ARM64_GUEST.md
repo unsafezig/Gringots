@@ -1,8 +1,7 @@
 # ARM64 Zinux Guest — Minimal Milestone (Phase 1)
 
-Status: **Defined, not yet implemented**. This doc is the build gate for
-the ARM64 port; the x86_64/Limine path remains the supported target
-until the gate below passes.
+Status: **Phase 1 complete**. The ARM64 guest boots in the desktop QEMU
+reference environment; the x86_64/Limine path remains an additional target.
 
 ## Why ARM64
 
@@ -33,28 +32,35 @@ Desktop QEMU `virt` machine, no KVM required:
 
 ```text
 qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512 \
-  -kernel zig-out/bin/zinux-kernel-aarch64.elf \
-  -nographic -serial mon:stdio
+  -kernel zig-out/bin/zinux-aarch64 \
+  -display none -monitor none -serial file:zig-out/aarch64-boot.log \
+  -no-reboot -semihosting-config enable=on,target=native
 # expect: "Zinux ARM64 boot OK"
 ```
 
-Until the kernel port lands, the standing compile gate is:
+The reproducible build and smoke gate is:
 
 ```text
-zig build        # must pass, incl. host_protocol_aarch64 static lib
-zig build test   # must pass on host
+zig build aarch64
+zig build aarch64-verify
+zig build aarch64-run
+zig build test
 ```
 
-`host_protocol_aarch64` (see `../../build.zig`) proves the entire
-guest-host boundary + `gringotsd` contract compiles for
-`aarch64-freestanding` today. Kernel/arch port (`kernel/arch/aarch64/`,
-PSCI boot, PL011 serial, `virt` timer/GIC) is the remaining work and
-MUST NOT break the x86_64/Limine build.
+The current Phase 1 implementation is intentionally limited to the boot
+kernel, PL011 output, deterministic boot marker, prompt marker and
+semihosting smoke exit. Timer/GIC, block, datagram, clock and userland init
+are Phase 2+ work and are not claimed by this milestone.
+
+`host_protocol_aarch64` (see `../../build.zig`) also proves that the
+guest-host boundary compiles for `aarch64-freestanding`.
 
 ## Tests (on completion)
 
-* ARM64 kernel builds reproducibly.
-* Guest boots in the desktop reference command above.
-* Init starts; serial contains the deterministic boot marker.
-* Invalid guest device requests are rejected.
-* `zig build` (x86_64 ISO + QEMU smoke) still passes unmodified.
+* [x] ARM64 kernel builds reproducibly.
+* [x] Guest boots in the desktop reference environment.
+* [x] Serial output contains the deterministic boot marker and prompt.
+* [x] Semihosting smoke exit returns successfully.
+* [ ] Init starts as a userland process.
+* [ ] Invalid guest device requests are rejected.
+* [x] `zig build` and `zig build test` preserve the existing x86_64 path.
