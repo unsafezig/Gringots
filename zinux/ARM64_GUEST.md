@@ -61,6 +61,7 @@ guest-host boundary compiles for `aarch64-freestanding`.
 * [x] Guest boots in the desktop reference environment.
 * [x] Serial output contains the deterministic boot marker and prompt.
 * [x] Semihosting smoke exit returns successfully.
-* [ ] Init starts as a userland process.
-* [ ] Invalid guest device requests are rejected.
+* [x] Init starts as a userland process (Phase 2: EL0 init + hello service).
+* [x] Invalid guest device requests are rejected (capability IPC, storage
+  bounds, datagram framing — all fail closed in `aarch64-run`).
 * [x] `zig build` and `zig build test` preserve the existing x86_64 path.

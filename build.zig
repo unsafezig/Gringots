@@ -105,6 +105,19 @@ pub fn build(b: *std.Build) void {
     const e2e_tests = b.addTest(.{ .root_module = e2e_mod });
     test_step.dependOn(&b.addRunArtifact(e2e_tests).step);
 
+    // Phase 4 desktop bridge: same framing over UDP loopback.
+    const bridge_mod = b.createModule(.{
+        .root_source_file = b.path("zinux/host_bridge/bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bridge_mod.addImport("host_protocol", hp_mod);
+    bridge_mod.addImport("gringots_root", gringots_root_mod);
+    bridge_mod.addImport("service_ipc", svc_ipc_mod);
+    bridge_mod.addImport("test_receiver", rx_mod);
+    const bridge_tests = b.addTest(.{ .root_module = bridge_mod });
+    test_step.dependOn(&b.addRunArtifact(bridge_tests).step);
+
     // Phase 1 smoke: new guest/host code must also compile for
     // aarch64-freestanding (no kernel port yet — compile gate only).
     const aarch64_query = std.Target.Query{

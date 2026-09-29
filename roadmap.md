@@ -274,6 +274,8 @@ IPC port reject OK
 storage OK
 storage reject OK
 clock OK
+datagram TX OK
+datagram reject OK
 hello service EL0
 hello service done
 Zinux init exit
@@ -294,6 +296,7 @@ The current smoke ABI is deliberately temporary and minimal:
 | Exit operation | `SYS_EXIT = 1` |
 | Hello operations | `SYS_START_HELLO = 2`, `SYS_HELLO_DONE = 3` |
 | Cap IPC operations | `SYS_IPC_CREATE = 4`, `SYS_IPC_SEND = 5`, `SYS_IPC_RECV = 6` |
+| Datagram operations | `SYS_DATAGRAM_SEND = 11`, `SYS_DATAGRAM_RECV = 12` |
 | Storage operations | `SYS_STORE_WRITE = 7`, `SYS_STORE_READ = 8` |
 | Clock operations | `SYS_CLOCK_MONO = 9`, `SYS_CLOCK_WALL = 10` |
 | IPC request | deterministic `IPC1` marker value |
@@ -393,11 +396,15 @@ process records rather than mutations of the current SVC frame.
 
 A second constraint was found while wiring the capability/storage stubs:
 EL1 runs with FP/SIMD disabled, so compiler-autovectorized code (struct
-zeroing, fixed-count byte-shift loops) faults with Undefined Instruction
-under QEMU. The guest-side copies therefore use scalar or volatile access
-until a future phase explicitly enables FP/SIMD via `CPACR_EL1`/`CPTR_EL2`.
-This also constrains `gringotsd`: its crypto must stay scalar on this guest
-until that enablement lands.
+zeroing, fixed-count byte-shift loops, short-literal staging) faults with
+Undefined Instruction under QEMU. The datagram-device slice resolved the
+fault class at its root: the guest now enables FP/SIMD via `CPTR_EL2`
+(no trap to EL2) and `CPACR_EL1.FPEN`, set in `boot.S` before `kmain`.
+Scalar/volatile discipline stays as hygiene, but the fault class is closed.
+Open consequence: the 272-byte exception frame still does not preserve
+q-registers, so no service switch may rely on FP state surviving an SVC.
+Full FPU context save/restore arrives with the scheduler, before any
+preemptive or crypto-heavy service (`gringotsd`) runs in the guest.
 
 No Android or Redmi Note 8 Pro test is allowed to bypass these desktop gates.
 
@@ -564,6 +571,26 @@ Gringots receiver
 - replayed nonce
 - invalid ACK reference
 - unknown response treated as no acknowledgement
+
+### Implementation record (desktop slice)
+
+Two halves of the data flow are proven, the guest-bridge hop is next:
+
+- Guest virtual datagram device (`Zinux/kernel/arch/aarch64/datagram.zig`):
+  bounded TX/RX rings (4 x 1034 B), v1 framing validation
+  (magic/version/length/CRC32), `SYS_DATAGRAM_SEND/RECV`, EL0 demo with
+  `datagram TX OK` / `datagram reject OK` markers in `aarch64-run`.
+- Desktop bridge (`zinux/host_bridge/bridge.zig`): the same framing over
+  UDP loopback (receiver `127.0.0.1:48481`, bridge `127.0.0.1:48482`).
+  `classify` transmits valid `GUEST_SOS_SEND` payloads untouched, answers
+  wrong-op/bad-payload datagrams with `HOST_ERROR`, and drops unparsable
+  framing silently. A loopback test runs real SOS bytes through real
+  sockets: service -> bridge -> receiver -> ACK -> service reports acked.
+
+Remaining before the milestone: the guest-bridge hop (semihosting-file
+shim under QEMU: guest TX file -> bridge -> UDP -> receiver -> ACK file
+-> guest RX), then in-guest crypto so `gringotsd` itself can mint and
+verify frames on target.
 
 ### Milestone
 
