@@ -101,9 +101,20 @@ Byte offsets in the 4 KiB Gringots-owned region, integers little-endian
 ```
 
 File backing on desktop: `zig-out/gringots-store.dat` via semihosting
-(loaded at service init, stored on every mutation). Rotation stays gated
-on host wall time; until then the demo seed + per-boot stream give unique
-nonces without claiming rotation.
+(loaded at service init, stored on every mutation).
+
+### 2.2 Identity rotation (implemented)
+
+* Drive: `service.onWallTime(wall)` after init; fresh regions stamp
+  `created_at`, expired (`IDENTITY_LIFETIME_S`) or backwards clocks start
+  a new epoch. Desktop wall time comes from semihosting `SYS_TIME`;
+  Android will use `HOST_TIME_SYNC`.
+* Epoch: stream-derived seed, `created_at` update, acked + SOS state
+  cleared, replay ring kept, everything persisted.
+* On-demand: `SYS_GRINGOTS_ROTATE` (SVC 23) rotates immediately and
+  prints `identity rotated`; the EL0 demo proves SOS state clears.
+* Demo mint stays on the fixed vector (bridge determinism); the stream
+  is the production nonce path under test.
 
 ## 3. Milestone (Phase 3)
 

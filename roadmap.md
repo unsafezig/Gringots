@@ -280,6 +280,7 @@ gringots send OK
 bridge TX file OK
 datagram TX OK
 datagram reject OK
+identity rotated
 hello service EL0
 hello service done
 Zinux init exit
@@ -311,6 +312,7 @@ The current smoke ABI is deliberately temporary and minimal:
 | Gringots service ops | `SYS_GRINGOTS_SOS = 16` (mint + queue), `SYS_GRINGOTS_ACK = 17` (verify) |
 | Service status/stream | `SYS_GRINGOTS_STATUS = 18` (bits + last nonce), `SYS_GRINGOTS_MINT_UNIQUE = 19` |
 | Service ops | `SYS_GRINGOTS_VERIFY = 20` (local verdict), `SYS_GRINGOTS_DESCRIBE = 21` (text), `SYS_GRINGOTS_SEND = 22` (shape-check + queue) |
+| Rotation | `SYS_GRINGOTS_ROTATE = 23` (on-demand epoch); timed via `onWallTime` |
 | Storage operations | `SYS_STORE_WRITE = 7`, `SYS_STORE_READ = 8` |
 | Clock operations | `SYS_CLOCK_MONO = 9`, `SYS_CLOCK_WALL = 10` |
 | IPC request | deterministic `IPC1` marker value |
@@ -672,8 +674,20 @@ the production path under test. Implemented since: `VERIFY_FRAME` (staged verdic
 bad-sig/semantics), `DESCRIBE_FRAME` (structure-only text, unverified)
 and `SEND_FRAME` (shape-check + queue, same rule as the host service) as
 SVC 20/21/22, demoed in EL0 against the guest's own SOS bytes
-(valid + corrupted + empty cases). Remaining: identity rotation once the
-host provides wall time.
+(valid + corrupted + empty cases).
+
+### Rotation and wall time
+
+Wall time drives identity rotation: desktop QEMU provides it through
+semihosting `SYS_TIME` (documented shim; `SYS_CLOCK_WALL` now succeeds
+and EL0 asserts a sane date), Android will deliver `HOST_TIME_SYNC`
+(spec'd in `HOST_PROTOCOL.md` Section 7, reserved op `0x07`).
+`service.onWallTime` stamps fresh regions and rotates past
+`IDENTITY_LIFETIME_S` or on backwards jumps (new stream-derived seed,
+acked + SOS state cleared, replay ring kept, all persisted);
+`SYS_GRINGOTS_ROTATE` (SVC 23) rotates on demand with an `identity
+rotated` marker, and EL0 proves SOS state clears. Expiry, backwards
+jumps and restart-with-new-seed are host-tested.
 
 Replay evidence: re-running the bridge gate WITHOUT wiping the store
 file makes boot 2 report `ack: replay` — the persisted ring correctly

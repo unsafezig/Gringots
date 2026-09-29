@@ -51,6 +51,7 @@ Total max datagram: `2 + 1 + 1 + 2 + 1024 + 4 = 1034` bytes.
 | `0x04` | `HOST_STATUS_RESP` | host → guest | `acked:1B, pending_consents:1B, reserved:2B` | Bridge/service status snapshot. |
 | `0x05` | `HOST_ERROR` | host → guest | `code:1B [, detail:UTF-8 ≤32B]` | Rejection notice. Never a Gringots `ACK`. |
 | `0x06` | `HOST_CONSENT_DECISION` | host → guest | `req_id:4B BE, decision:1B (0=deny,1=approve), at:8B BE` | User consent result for a pending location request. |
+| `0x07` | `HOST_TIME_SYNC` | host → guest | `wall:8B BE (unix seconds)` | Wall-clock delivery for identity rotation. Reserved for the Android bridge; the desktop shim uses semihosting `SYS_TIME` instead. |
 
 Error codes (`HOST_ERROR.code`):
 
@@ -90,6 +91,17 @@ CAP_NETWORK_DATAGRAM
 * `HOST_FRAME_DELIVER` receive requires `CAP_GRINGOTS_RECEIVE`.
 * Location/microphone/speaker/Bluetooth capabilities are NOT granted in
   this phase. Any `OP` needing them MUST fail with `DENIED`.
+
+## 7. Wall time (desktop vs Android)
+
+`HOST_TIME_SYNC` carries the host's unix wall time for identity-rotation
+decisions (`service.onWallTime` contract: stamp fresh regions, rotate past
+`IDENTITY_LIFETIME_S` or on backwards jumps). On desktop QEMU the guest
+reads semihosting `SYS_TIME` directly in its `CLOCK_WALL` handler — a
+documented shim, not the protocol path. The Android bridge MUST deliver
+`HOST_TIME_SYNC` (unsolicited, at bridge start and at most hourly
+after); the guest MUST ignore wall times older than its stored
+`created_at` except by rotating (never silently rewinding trust).
 
 ## 5. Failure behavior matrix
 
