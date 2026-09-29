@@ -276,6 +276,7 @@ storage reject OK
 clock OK
 datagram TX OK
 datagram reject OK
+crypto OK
 bridge TX file OK
 hello service EL0
 hello service done
@@ -302,6 +303,7 @@ The current smoke ABI is deliberately temporary and minimal:
 | Cap IPC operations | `SYS_IPC_CREATE = 4`, `SYS_IPC_SEND = 5`, `SYS_IPC_RECV = 6` |
 | Datagram operations | `SYS_DATAGRAM_SEND = 11`, `SYS_DATAGRAM_RECV = 12` |
 | File-shim operations | `SYS_DATAGRAM_SYNC_OUT = 13`, `SYS_DATAGRAM_SYNC_IN = 14` |
+| Crypto self-test | `SYS_CRYPTO_SELFTEST = 15` (RFC 8032 + SOS round trip on target) |
 | Storage operations | `SYS_STORE_WRITE = 7`, `SYS_STORE_READ = 8` |
 | Clock operations | `SYS_CLOCK_MONO = 9`, `SYS_CLOCK_WALL = 10` |
 | IPC request | deterministic `IPC1` marker value |
@@ -320,10 +322,17 @@ stubs exist, but there is still no scheduler policy and no `gringotsd`.
 
 The shortcut above has now been replaced by an explicit
 `Aarch64ExceptionFrame`. The lower-EL synchronous vector saves and restores
-`x0` through `x30`, `ESR_EL1`, `ELR_EL1` and `SPSR_EL1` in a 272-byte,
-16-byte-aligned frame. The Zig `extern` structure has host unit tests that
-lock its assembly offsets (`x0=0`, `x8=64`, `x30=240`, `ESR=248`,
-`ELR=256`, `SPSR=264`).
+`x0` through `x30`, `ESR_EL1`, `ELR_EL1`, `SPSR_EL1`, `q0`-`q31` and
+`FPCR`/`FPSR` in an 800-byte frame (272 + 512 + 16, still 16-aligned).
+The Zig `extern` structure has host unit tests that lock its assembly
+offsets (`x0=0`, `x8=64`, `x30=240`, `ESR=248`, `ELR=256`, `SPSR=264`,
+`q0=272`, `q31=768`, `FPCR=784`, `FPSR=792`).
+
+Restore-ordering rule (found by debugging): control registers (`FPCR`,
+`FPSR`, `ELR_EL1`, `SPSR_EL1`) are restored through the `x9` scratch
+BEFORE the x-register block. Restoring them after `ldp x0..x30` would
+overwrite the guest's genuine `x9` — this produced a silent EL0 hang
+(value mismatch, no fault) and is now a documented vector invariant.
 
 Syscall dispatch now receives only that frame: the syscall number is `x8`
 and the response is written explicitly to saved `x0`. `ELR_EL1` already
@@ -604,9 +613,18 @@ first-boot case (`NOT_FOUND`, silent). What still carries demo bytes
 instead of crypto: the shim reply is canned, because the guest cannot yet
 mint or verify Gringots frames.
 
-Remaining before the milestone: in-guest crypto (Ed25519 + framing port
-so `gringotsd` mints/verifies on target; needs FPU context save/restore
-first), then the shim loop carries a real SOS out and a real ACK back.
+In-guest crypto is proven: `Zinux/kernel/arch/aarch64/gringots/`
+vendors `types`/`frame`/`msg`/`ed25519` from Gringots ef2c743 (flat
+imports, provenance headers) and `selftest.zig` runs the RFC 8032 vector
+plus an SOS mint/verify round trip on target (`crypto OK` in
+`aarch64-run`, same file host-tested). The 800-byte frame now preserves
+q-registers across SVC, which the crypto path requires.
+
+Remaining before the milestone: the shim loop carries a real SOS out and
+a real ACK back — guest mints SOS via the vendored subset, desktop
+receiver verifies and replies, guest verifies the ACK and reports it.
+`gringotsd` as a proper service (keys/replay in Gringots-owned storage,
+IPC operations) follows once that loop is green.
 
 ### Milestone
 
