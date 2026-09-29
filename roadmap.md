@@ -276,10 +276,14 @@ storage reject OK
 clock OK
 datagram TX OK
 datagram reject OK
+bridge TX file OK
 hello service EL0
 hello service done
 Zinux init exit
 ```
+
+(`aarch64-bridge` second boot additionally prints `bridge RX file OK`
+after validating the host reply datagram byte-for-byte.)
 
 The current smoke ABI is deliberately temporary and minimal:
 
@@ -297,6 +301,7 @@ The current smoke ABI is deliberately temporary and minimal:
 | Hello operations | `SYS_START_HELLO = 2`, `SYS_HELLO_DONE = 3` |
 | Cap IPC operations | `SYS_IPC_CREATE = 4`, `SYS_IPC_SEND = 5`, `SYS_IPC_RECV = 6` |
 | Datagram operations | `SYS_DATAGRAM_SEND = 11`, `SYS_DATAGRAM_RECV = 12` |
+| File-shim operations | `SYS_DATAGRAM_SYNC_OUT = 13`, `SYS_DATAGRAM_SYNC_IN = 14` |
 | Storage operations | `SYS_STORE_WRITE = 7`, `SYS_STORE_READ = 8` |
 | Clock operations | `SYS_CLOCK_MONO = 9`, `SYS_CLOCK_WALL = 10` |
 | IPC request | deterministic `IPC1` marker value |
@@ -364,6 +369,7 @@ Zinux/zig build
 Zinux/zig build aarch64
 Zinux/zig build aarch64-verify
 Zinux/zig build aarch64-run
+Zinux/zig build aarch64-bridge
 Gringots/zig build test
 ```
 
@@ -587,10 +593,20 @@ Two halves of the data flow are proven, the guest-bridge hop is next:
   framing silently. A loopback test runs real SOS bytes through real
   sockets: service -> bridge -> receiver -> ACK -> service reports acked.
 
-Remaining before the milestone: the guest-bridge hop (semihosting-file
-shim under QEMU: guest TX file -> bridge -> UDP -> receiver -> ACK file
--> guest RX), then in-guest crypto so `gringotsd` itself can mint and
-verify frames on target.
+Guest-bridge hop (file shim, `Zinux/zig build aarch64-bridge`): the guest
+spills its TX datagram via semihosting `SYS_OPEN/WRITE` to
+`zig-out/guest-tx.dat` (`bridge TX file OK`); the host shim
+(`Zinux/tools/datagram_shim.zig`) validates v1 framing and writes a canned
+`HOST_FRAME_DELIVER`; the next boot reads it via `SYS_OPEN/FLEN/READ`,
+validates framing, injects it into the RX queue and verifies the payload
+byte-for-byte (`bridge RX file OK`). A missing reply file is the normal
+first-boot case (`NOT_FOUND`, silent). What still carries demo bytes
+instead of crypto: the shim reply is canned, because the guest cannot yet
+mint or verify Gringots frames.
+
+Remaining before the milestone: in-guest crypto (Ed25519 + framing port
+so `gringotsd` mints/verifies on target; needs FPU context save/restore
+first), then the shim loop carries a real SOS out and a real ACK back.
 
 ### Milestone
 
