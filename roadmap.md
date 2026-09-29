@@ -284,9 +284,10 @@ hello service done
 Zinux init exit
 ```
 
-(`aarch64-bridge` second boot additionally prints `bridge RX file OK`
-and `ACK OK`: the host reply is a real receiver-minted ACK that the
-guest verifies end-to-end.)
+(`aarch64-bridge` second boot additionally prints `store load OK`,
+`bridge RX file OK` and `ACK OK`: persisted service state loads from
+file, and the host reply is a real receiver-minted ACK that the guest
+verifies end-to-end.)
 
 The current smoke ABI is deliberately temporary and minimal:
 
@@ -307,6 +308,7 @@ The current smoke ABI is deliberately temporary and minimal:
 | File-shim operations | `SYS_DATAGRAM_SYNC_OUT = 13`, `SYS_DATAGRAM_SYNC_IN = 14` |
 | Crypto self-test | `SYS_CRYPTO_SELFTEST = 15` (RFC 8032 + SOS round trip on target) |
 | Gringots service ops | `SYS_GRINGOTS_SOS = 16` (mint + queue), `SYS_GRINGOTS_ACK = 17` (verify) |
+| Service status/stream | `SYS_GRINGOTS_STATUS = 18` (bits + last nonce), `SYS_GRINGOTS_MINT_UNIQUE = 19` |
 | Storage operations | `SYS_STORE_WRITE = 7`, `SYS_STORE_READ = 8` |
 | Clock operations | `SYS_CLOCK_MONO = 9`, `SYS_CLOCK_WALL = 10` |
 | IPC request | deterministic `IPC1` marker value |
@@ -651,6 +653,35 @@ verification — a service built directly on RX bytes would mis-verify.
 Staged reject markers (`ack: no rx` / `no sos` / `bad frame` / `not ack` /
 `no ref` / `ref mismatch` / `replay` / `not deliver`) stay for `gringotsd`
 diagnostics.
+
+### Service v1 (gringotsd precursor)
+
+`Zinux/kernel/arch/aarch64/gringots/service.zig` owns identity seed,
+boot counter, nonce stream (splitmix64), replay ring, ack flag and last
+nonce in Gringots-owned storage (exact layout in `GRINGOTS_SERVICE.md`
+Section 2), behind an injectable backend: semihosting files on target,
+RAM buffers in host tests. Every mutation persists; `init` loads or
+fresh-starts with a `GRG1` magic check. Proven in gates: boot counter
+bumps per boot, stream nonces differ within and across boots, replay +
+acked + last nonce survive a simulated restart (host test) and a real one
+(`store load OK` on bridge boot 2). The bridge demo mint stays a fixed
+vector (deterministic across the two-boot file protocol); the stream is
+the production path under test. Remaining service surface: `VERIFY_FRAME`,
+`DESCRIBE_FRAME`, `SEND_FRAME` as IPC ops, identity rotation once the
+host provides wall time.
+
+### Gate-integrity finding (test discovery)
+
+`zig build test` silently skipped every ARM64 kernel test: Zig does not
+run test blocks across a NAMED-module import boundary, so the
+`tests/host/*_test.zig` wrappers compiled but never executed. This hid
+real latent bugs (single-pointer signatures in `cap_ipc`/`storage`,
+an alignment panic in `writeWord`). Fixed with
+`kernel/arch/aarch64/host_tests.zig`: one test binary rooted next to the
+files, relative imports, 19 tests actually running. Rule for new code:
+host-run tests must live behind a relative import from a test root, or
+they do not run. (Gringots was unaffected: each of its test binaries is
+rooted at the tested file.)
 
 This is the first complete Zinux + Gringots demonstration and must be
 implemented before Android radio integration.

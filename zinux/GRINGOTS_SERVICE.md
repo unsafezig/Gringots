@@ -72,6 +72,31 @@ refuse to emit them without a `HOST_CONSENT_DECISION(approve)` — see
 * Persistent: seed + replay window + session expiry in
   `CAP_PERSISTENT_STORAGE(gringots)` so restarts survive normally.
 
+### 2.1 Guest storage layout (service v1, implemented)
+
+Byte offsets in the 4 KiB Gringots-owned region, integers little-endian
+(`Zinux/kernel/arch/aarch64/gringots/service.zig`):
+
+```text
+0..32    identity seed
+32..40   created_at wall time (0 = demo/unset)
+40..48   boot counter (++ per service init)
+48..52   magic "GRG1" (absent = fresh start)
+52..56   reserved
+56..64   demo SOS count
+64..72   nonce stream state (splitmix64, reseeded per boot)
+72..80   flags (bit0 = acked)
+80..96   last demo nonce (16 B)
+96..104  replay validity bitmap (u64)
+104..3688 replay ring: 64 x (id 32 B + nonce 16 B + expires u64)
+3688..3696 replay cursor (u64)
+```
+
+File backing on desktop: `zig-out/gringots-store.dat` via semihosting
+(loaded at service init, stored on every mutation). Rotation stays gated
+on host wall time; until then the demo seed + per-boot stream give unique
+nonces without claiming rotation.
+
 ## 3. Milestone (Phase 3)
 
 ```text
