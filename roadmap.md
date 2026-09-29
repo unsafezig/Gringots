@@ -274,17 +274,19 @@ IPC port reject OK
 storage OK
 storage reject OK
 clock OK
+crypto OK
+gringots SOS OK
+bridge TX file OK
 datagram TX OK
 datagram reject OK
-crypto OK
-bridge TX file OK
 hello service EL0
 hello service done
 Zinux init exit
 ```
 
 (`aarch64-bridge` second boot additionally prints `bridge RX file OK`
-after validating the host reply datagram byte-for-byte.)
+and `ACK OK`: the host reply is a real receiver-minted ACK that the
+guest verifies end-to-end.)
 
 The current smoke ABI is deliberately temporary and minimal:
 
@@ -304,6 +306,7 @@ The current smoke ABI is deliberately temporary and minimal:
 | Datagram operations | `SYS_DATAGRAM_SEND = 11`, `SYS_DATAGRAM_RECV = 12` |
 | File-shim operations | `SYS_DATAGRAM_SYNC_OUT = 13`, `SYS_DATAGRAM_SYNC_IN = 14` |
 | Crypto self-test | `SYS_CRYPTO_SELFTEST = 15` (RFC 8032 + SOS round trip on target) |
+| Gringots service ops | `SYS_GRINGOTS_SOS = 16` (mint + queue), `SYS_GRINGOTS_ACK = 17` (verify) |
 | Storage operations | `SYS_STORE_WRITE = 7`, `SYS_STORE_READ = 8` |
 | Clock operations | `SYS_CLOCK_MONO = 9`, `SYS_CLOCK_WALL = 10` |
 | IPC request | deterministic `IPC1` marker value |
@@ -626,14 +629,28 @@ receiver verifies and replies, guest verifies the ACK and reports it.
 `gringotsd` as a proper service (keys/replay in Gringots-owned storage,
 IPC operations) follows once that loop is green.
 
-### Milestone
+### Milestone — achieved (file-shim path)
 
 ```text
-Zinux creates CIVILIAN_SOS
-Desktop receiver verifies it
-ACK returns to Zinux
-Zinux reports valid acknowledgement
+Zinux creates CIVILIAN_SOS        # gringots SOS OK (guest-minted, TX file)
+Desktop receiver verifies it      # file-bridge: SOS verified (real crypto)
+ACK returns to Zinux              # host-rx.dat, HOST_FRAME_DELIVER
+Zinux reports valid acknowledgement  # ACK OK (guest-verified signature+ref)
 ```
+
+Demonstrated by `Zinux/zig build aarch64-bridge`: boot 1 spills the SOS,
+the host bridge verifies it and mints a real ACK, boot 2 verifies the
+ACK's signature, type, `ref` and replay-freshness on target. Transport is
+still files, not radio — Wi-Fi/BLE/audio arrive in Phases 6-9 behind the
+same framing both ends already speak.
+
+Layering evidence from this slice: the ACK handler first fed the whole
+host datagram to Gringots verification (`ack: bad frame`). The guest must
+strip transport framing (`op` + payload range) before protocol
+verification — a service built directly on RX bytes would mis-verify.
+Staged reject markers (`ack: no rx` / `no sos` / `bad frame` / `not ack` /
+`no ref` / `ref mismatch` / `replay` / `not deliver`) stay for `gringotsd`
+diagnostics.
 
 This is the first complete Zinux + Gringots demonstration and must be
 implemented before Android radio integration.
