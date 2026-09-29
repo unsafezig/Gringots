@@ -279,7 +279,7 @@ The current smoke ABI is deliberately temporary and minimal:
 | Guest mode | EL0t for init; EL1h for kernel/exception handling |
 | Entry | `aarch64_init_entry` in the embedded ARM64 ELF |
 | Trap | `svc #0` from EL0 |
-| Dispatch input | ESR_EL1, ELR_EL1 and the current syscall register |
+| Dispatch input | saved `ESR_EL1`, saved `ELR_EL1` and saved `x8` in `Aarch64ExceptionFrame` |
 | IPC operation | `SYS_IPC_SMOKE = 0` |
 | Exit operation | `SYS_EXIT = 1` |
 | IPC request | deterministic `IPC1` marker value |
@@ -287,23 +287,36 @@ The current smoke ABI is deliberately temporary and minimal:
 | Exit | semihosting `SYS_EXIT`, status 0 |
 | Ownership | kernel owns the vector and UART; init owns the request sequence |
 
-This ABI is not yet the final Zinux process ABI. In particular, the current
-vector saves only the registers needed by the smoke path. A service switch
-must not be built on that shortcut.
+This ABI is not yet the final Zinux process ABI. Its exception vector now
+preserves a full user context, but process switching and service lifecycle
+state have not yet been implemented.
+
+### Exception-Frame Follow-Up
+
+The shortcut above has now been replaced by an explicit
+`Aarch64ExceptionFrame`. The lower-EL synchronous vector saves and restores
+`x0` through `x30`, `ESR_EL1`, `ELR_EL1` and `SPSR_EL1` in a 272-byte,
+16-byte-aligned frame. The Zig `extern` structure has host unit tests that
+lock its assembly offsets (`x0=0`, `x8=64`, `x30=240`, `ESR=248`,
+`ELR=256`, `SPSR=264`).
+
+Syscall dispatch now receives only that frame: the syscall number is `x8`,
+the response is written explicitly to saved `x0`, and advancing the saved
+`ELR_EL1` is the only control-flow mutation for `SYS_IPC_SMOKE`. The vector
+restores all other user registers from the frame before `eret`. The
+`aarch64-run` QEMU gate completed with all four Phase 2 output markers after
+this change.
 
 ### Phase 2 Next Gates
 
 Implement the remaining work in this order:
 
-1. Define an explicit `Aarch64ExceptionFrame` layout containing x0-x30,
-   ESR_EL1, ELR_EL1 and SPSR_EL1. The assembly offsets and the Zig `extern`
-   struct must be tested against each other.
-2. Preserve and restore all user registers around the EL0 SVC path. The
-   handler return value must be explicitly defined as x0; all other registers
-   must return from the saved frame.
-3. Define syscall dispatch independently from compiler scratch-register
-   behavior. The syscall number must have one documented location and one
-   documented clobber rule.
+1. Completed: define and test the `Aarch64ExceptionFrame` layout containing
+   x0-x30, ESR_EL1, ELR_EL1 and SPSR_EL1.
+2. Completed: preserve and restore all user registers around the EL0 SVC
+   path; the handler response is explicitly saved `x0`.
+3. Completed for the smoke ABI: syscall dispatch reads only saved `x8`; the
+   handler may modify saved `x0`, `ELR_EL1` and `SPSR_EL1` explicitly.
 4. Add `START_HELLO` and `HELLO_DONE` operations. Init must save its ELR/SP
    state, enter a separate EL0 hello-service entry and return to init only
    after the service acknowledges completion.
@@ -345,8 +358,9 @@ Zinux init exit
 A first hello-service experiment attempted to change `SP_EL0` and `ELR_EL1`
 from the small SVC handler while restoring only a partial register set. Under
 QEMU this produced nondeterministic syscall dispatch and was removed. The
-experiment is retained as design evidence: service switching is blocked until
-the full exception-frame ABI and register restoration tests exist.
+full exception-frame ABI now resolves that prerequisite, but service switching
+remains blocked until init and hello process contexts are represented by
+process records rather than mutations of the current SVC frame.
 
 No Android or Redmi Note 8 Pro test is allowed to bypass these desktop gates.
 
