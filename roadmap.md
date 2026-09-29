@@ -269,6 +269,13 @@ Zinux ARM64 boot OK
 zinux>
 Zinux init EL0
 IPC request/response OK
+IPC port OK
+IPC port reject OK
+storage OK
+storage reject OK
+clock OK
+hello service EL0
+hello service done
 Zinux init exit
 ```
 
@@ -280,16 +287,26 @@ The current smoke ABI is deliberately temporary and minimal:
 | Entry | `aarch64_init_entry` in the embedded ARM64 ELF |
 | Trap | `svc #0` from EL0 |
 | Dispatch input | saved `ESR_EL1`, saved `ELR_EL1` and saved `x8` in `Aarch64ExceptionFrame` |
+| Syscall number | saved `x8` |
+| Syscall args | saved `x1`-`x3` (never `x0`, which is return-only) |
+| Syscall return | saved `x0` status; wider results via EL0-provided out-pointers |
 | IPC operation | `SYS_IPC_SMOKE = 0` |
 | Exit operation | `SYS_EXIT = 1` |
+| Hello operations | `SYS_START_HELLO = 2`, `SYS_HELLO_DONE = 3` |
+| Cap IPC operations | `SYS_IPC_CREATE = 4`, `SYS_IPC_SEND = 5`, `SYS_IPC_RECV = 6` |
+| Storage operations | `SYS_STORE_WRITE = 7`, `SYS_STORE_READ = 8` |
+| Clock operations | `SYS_CLOCK_MONO = 9`, `SYS_CLOCK_WALL = 10` |
 | IPC request | deterministic `IPC1` marker value |
 | IPC response | deterministic `IPC2` marker value |
+| Cap IPC demo | one `HELLO!!!` word, handle-checked; bad handle/rights/size fail closed |
+| Storage demo | one Gringots-owned 4 KiB region, word at offset 0; OOB fails closed |
+| Clock demo | monotonic ticks never go backwards; wall reads `NOT_READY` |
 | Exit | semihosting `SYS_EXIT`, status 0 |
 | Ownership | kernel owns the vector and UART; init owns the request sequence |
 
 This ABI is not yet the final Zinux process ABI. Its exception vector now
-preserves a full user context, but process switching and service lifecycle
-state have not yet been implemented.
+preserves a full user context, and the first capability, storage and clock
+stubs exist, but there is still no scheduler policy and no `gringotsd`.
 
 ### Exception-Frame Follow-Up
 
@@ -300,10 +317,11 @@ The shortcut above has now been replaced by an explicit
 lock its assembly offsets (`x0=0`, `x8=64`, `x30=240`, `ESR=248`,
 `ELR=256`, `SPSR=264`).
 
-Syscall dispatch now receives only that frame: the syscall number is `x8`,
-the response is written explicitly to saved `x0`, and advancing the saved
-`ELR_EL1` is the only control-flow mutation for `SYS_IPC_SMOKE`. The vector
-restores all other user registers from the frame before `eret`. The
+Syscall dispatch now receives only that frame: the syscall number is `x8`
+and the response is written explicitly to saved `x0`. `ELR_EL1` already
+points to the instruction after `svc`, so the smoke handler must not advance
+it. The vector restores all other user registers from the frame before `eret`.
+The
 `aarch64-run` QEMU gate completed with all four Phase 2 output markers after
 this change.
 
@@ -317,17 +335,21 @@ Implement the remaining work in this order:
    path; the handler response is explicitly saved `x0`.
 3. Completed for the smoke ABI: syscall dispatch reads only saved `x8`; the
    handler may modify saved `x0`, `ELR_EL1` and `SPSR_EL1` explicitly.
-4. Add `START_HELLO` and `HELLO_DONE` operations. Init must save its ELR/SP
-   state, enter a separate EL0 hello-service entry and return to init only
-   after the service acknowledges completion.
-5. Add a minimal process record containing pid, state, EL0 entry, stack and
-   parent. The first state machine only needs `READY`, `RUNNING`, `WAITING`
-   and `EXITED`; no scheduler policy is required yet.
-6. Add a capability-backed IPC port rather than passing a raw kernel-global
-   port identifier. Invalid handles, wrong rights and oversized messages must
-   fail closed.
-7. Add persistent-storage and monotonic-clock interfaces as stubs with
-   deterministic negative tests before `gringotsd` is attached.
+4. Completed: `SYS_START_HELLO` stores init's full EL0 exception frame,
+   switches to a separate hello EL0 entry and stack, and `SYS_HELLO_DONE`
+   restores init only after the hello service exits.
+5. Completed for this two-process handoff: process records contain pid,
+   state, EL0 entry, stack and parent, with `READY`, `RUNNING`, `WAITING` and
+   `EXITED` states. There is still no scheduler policy.
+6. Completed: capability-backed IPC ports (`cap_ipc.zig`). Handles are
+   issued by `create`; every use validates handle, rights and size.
+   Invalid handles, wrong rights, oversized and empty messages fail closed
+   in host tests and in the QEMU EL0 demo (`IPC port OK` /
+   `IPC port reject OK`).
+7. Completed as stubs: Gringots-owned 4 KiB storage (`storage.zig`) with
+   bounds-checked access and a monotonic tick counter plus not-ready wall
+   clock (`clock.zig`). Negative paths (OOB, `NOT_READY`) are host-tested
+   and QEMU-demonstrated (`storage OK` / `storage reject OK` / `clock OK`).
 
 ### Phase 2 Gate Commands
 
@@ -350,6 +372,13 @@ Zinux ARM64 boot OK
 zinux>
 Zinux init EL0
 IPC request/response OK
+IPC port OK
+IPC port reject OK
+storage OK
+storage reject OK
+clock OK
+hello service EL0
+hello service done
 Zinux init exit
 ```
 
@@ -361,6 +390,14 @@ QEMU this produced nondeterministic syscall dispatch and was removed. The
 full exception-frame ABI now resolves that prerequisite, but service switching
 remains blocked until init and hello process contexts are represented by
 process records rather than mutations of the current SVC frame.
+
+A second constraint was found while wiring the capability/storage stubs:
+EL1 runs with FP/SIMD disabled, so compiler-autovectorized code (struct
+zeroing, fixed-count byte-shift loops) faults with Undefined Instruction
+under QEMU. The guest-side copies therefore use scalar or volatile access
+until a future phase explicitly enables FP/SIMD via `CPACR_EL1`/`CPTR_EL2`.
+This also constrains `gringotsd`: its crypto must stay scalar on this guest
+until that enablement lands.
 
 No Android or Redmi Note 8 Pro test is allowed to bypass these desktop gates.
 
