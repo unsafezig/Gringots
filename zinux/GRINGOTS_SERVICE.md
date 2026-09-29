@@ -17,13 +17,21 @@ below are the canonical host-test byte forms; the Zinux port adapter
 carries the same fields.
 
 ```text
-CREATE_SOS      () -> FRAME(150..521B)
-VERIFY_FRAME    (frame) -> VALID | INVALID(reason)
-DESCRIBE_FRAME  (frame) -> TEXT(≤512B) | INVALID
-SEND_FRAME      (frame) -> QUEUED(host OP GUEST_SOS_SEND) | DENIED | BAD_PAYLOAD
-RECEIVE_FRAME   (frame) -> ACKED | NO_ACK(reason)   // HOST_FRAME_DELIVER payload
-GET_STATUS      () -> { acked:bool, pending:u8, last_nonce:?16B }
+CREATE_SOS      () -> FRAME(150..521B)                          [SVC 16]
+VERIFY_FRAME    (frame) -> VALID | MALFORMED | TIME | BAD_SIG | SEMANTICS  [SVC 20]
+DESCRIBE_FRAME  (frame) -> TEXT(≤512B) | INVALID                 [SVC 21]
+SEND_FRAME      (frame) -> QUEUED(host OP GUEST_SOS_SEND) | DENIED | BAD_PAYLOAD  [SVC 22]
+RECEIVE_FRAME   (frame) -> ACKED | NO_ACK(reason)   // HOST_FRAME_DELIVER payload  [SVC 17]
+GET_STATUS      () -> { acked:bool, pending:u8, last_nonce:?16B }  [SVC 18]
 ```
+
+Guest SVC mapping (`Zinux/kernel/arch/aarch64/syscall.zig`): 16 = mint
+demo SOS into EL0 out-struct + queue, 17 = verify one RX datagram as our
+ACK (staged reject codes), 18 = status bits + last nonce, 19 = unique
+nonce mint (service stream, not enqueued), 20/21/22 as above. EL0
+exercises valid + corrupted + empty cases; mismatches hang the gate
+visibly. `LOCATION_CONSENT`/`LOCATION_DISCLOSED` stay refused without a
+`HOST_CONSENT_DECISION(approve)`.
 
 ### Semantics
 

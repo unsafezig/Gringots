@@ -276,6 +276,7 @@ storage reject OK
 clock OK
 crypto OK
 gringots SOS OK
+gringots send OK
 bridge TX file OK
 datagram TX OK
 datagram reject OK
@@ -309,6 +310,7 @@ The current smoke ABI is deliberately temporary and minimal:
 | Crypto self-test | `SYS_CRYPTO_SELFTEST = 15` (RFC 8032 + SOS round trip on target) |
 | Gringots service ops | `SYS_GRINGOTS_SOS = 16` (mint + queue), `SYS_GRINGOTS_ACK = 17` (verify) |
 | Service status/stream | `SYS_GRINGOTS_STATUS = 18` (bits + last nonce), `SYS_GRINGOTS_MINT_UNIQUE = 19` |
+| Service ops | `SYS_GRINGOTS_VERIFY = 20` (local verdict), `SYS_GRINGOTS_DESCRIBE = 21` (text), `SYS_GRINGOTS_SEND = 22` (shape-check + queue) |
 | Storage operations | `SYS_STORE_WRITE = 7`, `SYS_STORE_READ = 8` |
 | Clock operations | `SYS_CLOCK_MONO = 9`, `SYS_CLOCK_WALL = 10` |
 | IPC request | deterministic `IPC1` marker value |
@@ -666,9 +668,17 @@ bumps per boot, stream nonces differ within and across boots, replay +
 acked + last nonce survive a simulated restart (host test) and a real one
 (`store load OK` on bridge boot 2). The bridge demo mint stays a fixed
 vector (deterministic across the two-boot file protocol); the stream is
-the production path under test. Remaining service surface: `VERIFY_FRAME`,
-`DESCRIBE_FRAME`, `SEND_FRAME` as IPC ops, identity rotation once the
+the production path under test. Implemented since: `VERIFY_FRAME` (staged verdict: valid/malformed/time/
+bad-sig/semantics), `DESCRIBE_FRAME` (structure-only text, unverified)
+and `SEND_FRAME` (shape-check + queue, same rule as the host service) as
+SVC 20/21/22, demoed in EL0 against the guest's own SOS bytes
+(valid + corrupted + empty cases). Remaining: identity rotation once the
 host provides wall time.
+
+Replay evidence: re-running the bridge gate WITHOUT wiping the store
+file makes boot 2 report `ack: replay` — the persisted ring correctly
+rejects the byte-identical second ACK. Gates wipe the store first so
+every run is hermetic.
 
 ### Gate-integrity finding (test discovery)
 
