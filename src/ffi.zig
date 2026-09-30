@@ -11,19 +11,21 @@
 //! 1 = invalid (any cause: framing, parse, time, signature).
 
 const std = @import("std");
-const root = @import("root.zig");
-const frame = root.frame;
-const msg = root.msg;
-const ed = root.crypto_;
+// Direct imports (not via root.zig): the JNI .so must not pull
+// transports/std.Io (thread-pool init references getauxval, which
+// Bionic lacks). Keeps the embedded surface minimal.
+const frame = @import("protocol/frame.zig");
+const msg = @import("protocol/msg.zig");
+const ed = @import("crypto/ed25519.zig");
 
 /// Protocol version implemented by this library.
-export fn gringots_version() u32 {
+pub export fn gringots_version() u32 {
     return 1;
 }
 
 /// Build a signed CIVILIAN_SOS frame.
 /// Returns frame length on success, -1 bad args, -2 crypto/encode failure.
-export fn gringots_make_sos(
+pub export fn gringots_make_sos(
     seed: [*]const u8,
     seed_len: usize,
     timestamp: u64,
@@ -52,13 +54,13 @@ export fn gringots_make_sos(
 }
 
 /// Verify a received frame at time `now`. 0 = valid, 1 = invalid.
-export fn gringots_verify_frame(frm: [*]const u8, len: usize, now: u64) i32 {
+pub export fn gringots_verify_frame(frm: [*]const u8, len: usize, now: u64) i32 {
     _ = msg.verifyFrame(frm[0..len], now) catch return 1;
     return 0;
 }
 
 /// Debug text form into OUT. Returns bytes written, negative on error.
-export fn gringots_describe(frm: [*]const u8, len: usize, out: [*]u8, out_cap: usize) i64 {
+pub export fn gringots_describe(frm: [*]const u8, len: usize, out: [*]u8, out_cap: usize) i64 {
     const dec = frame.decodeFrame(frm[0..len]) catch return -1;
     const m = msg.parseBody(dec.body) catch return -1;
     const text = msg.formatDebug(&m, out[0..out_cap]) catch return -1;

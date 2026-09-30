@@ -294,7 +294,7 @@ verifies end-to-end.)
 The current smoke ABI is deliberately temporary and minimal:
 
 | Item | Current rule |
-|---|---|
+| --- | --- |
 | Guest mode | EL0t for init; EL1h for kernel/exception handling |
 | Entry | `aarch64_init_entry` in the embedded ARM64 ELF |
 | Trap | `svc #0` from EL0 |
@@ -455,6 +455,7 @@ Security is not left until the end of the project, but its implementation must n
 **Acceptance Criteria:** Threat model and trust boundaries are documented, and interface security requirements are defined.
 
 ---
+
 ## Phase S2 – Host-Guest Interface Protection
 
 **Timeline:** As part of the implementation of the Gringots service and host interface.
@@ -469,6 +470,7 @@ Security is not left until the end of the project, but its implementation must n
 **Acceptance Criteria:** The interface accepts only defined operations and rejects erroneous, oversized, or unknown messages in a controlled manner.
 
 ---
+
 ## Phase S3 – Zinux Isolation and Service Boundaries
 
 **Timeline:** Alongside ARM64 user space and Gringots service development.
@@ -482,6 +484,7 @@ Security is not left until the end of the project, but its implementation must n
 **Acceptance Criteria:** The Gringots service operates within its granted permissions, and unauthorized requests are rejected.
 
 ---
+
 ## Phase S4 – Message Authenticity and Replay Attack Prevention
 
 **Timeline:** As part of Gringots end-to-end testing.
@@ -495,6 +498,7 @@ Security is not left until the end of the project, but its implementation must n
 **Acceptance Criteria:** The receiver accepts only protocol-compliant, verified, and fresh messages.
 
 ---
+
 ## Phase S5 – Android Integration Security Testing
 
 **Timeline:** Before releasing the Android version.
@@ -508,6 +512,7 @@ Security is not left until the end of the project, but its implementation must n
 **Acceptance Criteria:** Android integration security tests are passed, known limitations are documented, and error conditions are handled in a controlled manner.
 
 ---
+
 ## Security Progress Principle
 
 Security requirements progress in parallel with core development:
@@ -518,7 +523,6 @@ Security requirements progress in parallel with core development:
 4. Finally, Android integration security testing before release.
 
 This section complements the ARM64 user space, Gringots service, desktop integration, and Android host phases. It does not replace their functional acceptance criteria.
-
 
 ## Phase 3: Gringots as the First Zinux Service
 
@@ -710,6 +714,91 @@ rooted at the tested file.)
 This is the first complete Zinux + Gringots demonstration and must be
 implemented before Android radio integration.
 
+## Phase 4b: GRINGOTD relay daemon (desktop)
+
+> Numbering note: this is a Phase 4 sub-slice (desktop relay), not a
+> second Phase 5. The Android APK host below stays Phase 5.
+
+### Purpose
+
+GRINGOTD bridges the host bridge's datagram layer to one or more external
+Gringots receivers. It sits between the local `gringotsd` clients (which
+talk Zinux guest datagrams via the bridge) and the receiver network,
+translating a single bridge listener into outbound sender sockets.
+
+### Data flow
+
+```
+Bridge listener on localhost port
+    ↓ UDP bind
+GRINGOTD relay loop
+    ├─→ classify()  -- validation gate
+    ├─→ transmit (send_frame) → sender socket port 48481
+    ├─→ respond   (ACK relay) → forward to client ports
+    └─→ drop      (malformed)
+```
+
+### Implementation record
+
+- `zinux/gringotd/gringotd.zig` created (uncommitted slice):
+  - `GringotdRelay` struct owning a bridge listener socket and an external
+    sender socket.
+  - `init()` binds both sockets; `close()` tears them down.
+  - `classify(raw, out_buf)` performs validation and produces a
+    validated datagram copy when allowed; mirrors `bridge.classify`
+    so the daemon layer decides forward / respond / drop.
+  - `relayOne(payload)` dispatches the classification to `tx()`, a
+    wrapped outbound frame via `forwardToReceiver()`, or silently drops
+    (malformed).
+  - `relayInbound(raw, out_buf) !bool` accepts decoded inbound frames from
+    the receiver network and wraps them for delivery back to connected
+    clients on the bridge listener port.
+
+- `build.zig` updated:
+  - Registers `gringotd` module pointing at
+    `zinux/gringotd/gringotd.zig`.
+  - Adds test entry-point file under `tests/host_bridge/`
+    (`e2e_sos_ack.zig`) so the relay can be tested alongside Phase-4
+    bridge tests.
+
+- Tests:
+  - New `classify: forward SOS payload via relayOne` host test
+    validates framing, CRC and version checks; malformed datagrams are
+    rejected before they reach `relayLoop`.
+  - All existing e2e and protocol tests continue to pass.
+
+### Known gaps in the uncommitted slice (must be closed before green)
+
+- `relayOne` uses `try` on socket sends but is not fallible (`bool`
+  return): make it `!bool` or map send errors to drop/error counters.
+  A send failure must never unwind the relay loop.
+- `relayInbound` copies `m.payload` into `out_buf` today; define whether
+  the contract is "re-emit the full `HOST_FRAME_DELIVER` datagram" or
+  "payload only", and add a host test that round-trips a real ACK.
+- `tests/host_bridge/e2e_sos_ack.zig` carries a stray
+  `const gringotd_mod = @import("bridge");` (wrong module, unused):
+  wire the e2e to the real `gringotd` module or delete the import.
+- Port table in code is receiver `127.0.0.1:48481`, bridge
+  `127.0.0.1:48482` (`zinux/host_bridge/bridge.zig`
+  `RECEIVER_PORT`/`BRIDGE_PORT`). The `48490` value drafted below was
+  never in code — canonicalize on `48481`/`48482` in `HOST_PROTOCOL.md`.
+- Typo sweep: `GringodRelay` -> `GringotdRelay`, `GRINGODT`/`GRINGTD` ->
+  `GRINGOTD`.
+
+### Next gates for GRINGOTD
+
+- [ ] Close the known gaps above (`relayOne` fallibility, `relayInbound`
+      contract + test, stray e2e import, `GringotdRelay` rename).
+- [ ] Wire up multiple sender sockets so each receiver subnet can be reached
+      independently (initially loopback: one socket to `127.0.0.1:48481`).
+- [ ] Test relay inbound path end-to-end — ACK frames minted by the
+      standalone receiver must traverse GRINGOTD back to the client bridge
+      listener.
+- [ ] Add watchdog / liveness markers so `gringotsd` or other clients can
+      detect when the bridge socket is healthy.
+- [ ] Document port assignments (bridge: 48482, receiver: 48481) in
+      `HOST_PROTOCOL.md` as the canonical Zinux datagram ports.
+
 ## Phase 5: Android APK and VM Host
 
 ### Objectives
@@ -738,6 +827,64 @@ Gringots service ready
 The first Android UI may be a debug console with start, stop and status
 controls. A general desktop interface is out of scope.
 
+### Implementation record (uncommitted slice: native lib + debug APK)
+
+The native embedding path is proven; the VM host is not yet started:
+
+- `src/jni.zig` (new, uncommitted): `RegisterNatives`-bound
+  `GringotsBridge` natives (`version()I`, `makeSos([BJJ[B)[B`,
+  `verifyFrame([BJ)I`) plus `JNI_OnLoad` reporting 1.6. Buffer-based
+  and fixed-cap (600 B SOS / 1024 B verify); failures return null / 1,
+  never throw. Not host-testable (no JVM on host); the underlying calls
+  are covered by `ffi.zig` host tests.
+- `src/ffi.zig` (modified, uncommitted): direct imports of
+  `protocol/frame.zig`, `protocol/msg.zig`, `crypto/ed25519.zig`
+  instead of via `root.zig`, so the JNI `.so` does not pull
+  `transports/std.Io` (its thread-pool init references `getauxval`,
+  which Bionic lacks). `export fn` -> `pub export fn`.
+- `build.zig` (modified, uncommitted): `android-lib` step
+  cross-compiles `libgringots.so` for `aarch64-linux-android`.
+- `android/app/` (new, uncommitted): `AndroidManifest.xml`
+  (`ee.vaino.gringots`, min 26 / target 35, INTERNET + Wi-Fi-multicast +
+  foreground-service permissions, no location/BLE/audio), Java
+  `GringotsBridge.java` binding, `MainActivity.java` debug console.
+  Start runs a deterministic native self-test (mint SOS with fixed
+  seed/nonce at `t0`, `verify(valid)==0`, `verify(expired)==1` ->
+  `Gringots service ready`); stop returns to idle; `am start --ez
+  selftest true` runs headless for device automation.
+- `android/build-apk.ps1` + `android/package_apk.py` (new,
+  uncommitted): no-Gradle pipeline (zig -> javac 17 -> d8 -> aapt2 ->
+  python zipfile -> zipalign -> apksigner). `.so` entries are STORED
+  (mmap-able), `classes.dex` is deflated. Outputs to `android/build/`
+  (gitignored via `.gitignore`). Gate checks badging
+  (`ee.vaino.gringots`, `native-code: 'arm64-v8a'`) and cert verify.
+- `android/HOST_CAPABILITIES.md`, `android/CONSENT_FLOW.md` (committed
+  drafts, normative for Phases 5-7). `android/README.md` still says
+  "No APK sources yet" — stale after this slice, update on commit.
+
+### Phase 5 gate commands
+
+```text
+Gringots/zig build test
+Gringots/zig build android-lib
+Gringots/android/build-apk.ps1   # requires ANDROID_HOME SDK 35
+```
+
+### Phase 5 next gates (VM host slice, not started)
+
+- [ ] Update `android/README.md` (APK sources now exist).
+- [ ] Bundle the Zinux ARM64 guest image in the APK; start/stop the
+      guest VM or emulator from the debug console; allocate guest
+      memory; connect virtual serial, storage and datagram devices;
+      persist the guest filesystem in app-private storage.
+- [ ] Report `Gringots service ready` from the real guest path
+      (`init` -> `gringotsd`), replacing the current JNI self-test text
+      when the VM slice lands (keep the self-test as a fallback gate).
+- [ ] Install the built APK on the Redmi Note 8 Pro reference host and
+      run the headless self-test (`adb shell am start --ez selftest`);
+      record build, deployment and logcat conditions per the hardware
+      reference rule. No desktop gate may be bypassed.
+
 ## Phase 6: Android Wi-Fi Transport
 
 Wi-Fi/UDP is the first physical transport because it is easier to observe and
@@ -762,6 +909,21 @@ accept only the operations defined by the host protocol.
 
 The Android phone sends a signed `CIVILIAN_SOS` through Wi-Fi and receives a
 valid `ACK` from an independent Gringots receiver.
+
+### Next gates
+
+- [ ] Entry: Phase 5 VM-host slice green (guest boots, `gringotsd`
+      reports ready in the APK console).
+- [ ] Android host bridge: `GUEST_SOS_SEND` -> UDP broadcast on the
+      Wi-Fi subnet (`HOST_CAPABILITIES.md` scoped `CAP_NETWORK_DATAGRAM`);
+      `HOST_FRAME_DELIVER` path for returning ACKs. Guest still sees only
+      host-protocol ops, never raw sockets.
+- [ ] Desktop parity first: same SOS/ACK exchange over the desktop UDP
+      loopback bridge (Phase 4/4b) must stay green while the Android
+      transport adapter is added behind the same framing.
+- [ ] Redmi Wi-Fi transport test per the hardware reference sequence
+      (APK/debug-host gate -> Redmi smoke -> Redmi Wi-Fi); document
+      SSID/subnet/firewall conditions and the independent receiver used.
 
 ## Phase 7: Android Consent and Location
 
@@ -797,6 +959,19 @@ Rules:
 - Silence is never treated as acknowledgement.
 - Zinux cannot grant location access to itself.
 
+### Next gates
+
+- [ ] Entry: Phase 6 Wi-Fi SOS/ACK green on the Redmi reference host.
+- [ ] Implement `HOST_CONSENT_REQUEST` / `HOST_CONSENT_DECISION` against
+      `android/CONSENT_FLOW.md` (10-min TTL, bounded fix only, stale fix
+      -> honest `DECLINE`, no `SESSION_ID` reuse, `--auto-approve`
+      test-only and never shipped in the APK).
+- [ ] Negative tests: deny -> `DECLINE`, expired consent -> no send,
+      revoked session -> `DECLINE` + no further updates, SOS carrying
+      `LAT`/`LON` rejected by the receiver.
+- [ ] Desktop fixture first: consent decision injected via a fake host
+      bridge so `gringotsd` queuing/expiry logic is tested without a phone.
+
 ## Phase 8: Bluetooth LE
 
 ### Objectives
@@ -821,6 +996,20 @@ BLE advertisement / scan
 Android background execution and permission limitations must be documented as
 part of the implementation, not hidden behind an always-running loop.
 
+### Next gates
+
+- [ ] Entry: Phase 6 Wi-Fi path green; consent flow (Phase 7) specified
+      against `CONSENT_FLOW.md`.
+- [ ] Wire the existing BLE chunk codec to Android BLE APIs behind a
+      compile-time flag (off until this phase); keep fragmentation and
+      reassembly in the transport layer.
+- [ ] Enforce advertisement rate and burst limits; test scan, send,
+      receive, timeout and replay behavior against a desktop BLE fixture
+      before phone testing.
+- [ ] Document measured background/permission limits on the Redmi
+      reference host; a failed transport is reported as failure, never
+      as acknowledgement.
+
 ## Phase 9: Audible Fallback
 
 ### Objectives
@@ -844,6 +1033,17 @@ speaker / microphone
 
 Continuous microphone monitoring is not part of the first implementation.
 
+### Next gates
+
+- [ ] Entry: Phase 8 BLE slice green or explicitly deferred with a
+      recorded reason; Wi-Fi SOS/ACK remains the release transport.
+- [ ] Wire the existing FSK, Reed-Solomon and WAV codec to Android
+      `AudioTrack` / `AudioRecord` behind a compile-time flag; speaker
+      output controlled, microphone capture only through explicit
+      service behavior.
+- [ ] Treat unknown audio as no acknowledgement; test with recorded
+      fixtures before any phone microphone use.
+
 ## Phase 10: Reliability, Battery and Offline Operation
 
 ### Objectives
@@ -863,6 +1063,19 @@ Continuous microphone monitoring is not part of the first implementation.
 - Expired sessions are removed.
 - A failed transport does not become an infinite beacon.
 - No transport failure is reported as a successful acknowledgement.
+
+### Next gates
+
+- [ ] Entry: at least the Wi-Fi transport (Phase 6) green on the Redmi
+      host.
+- [ ] Integrate the existing duty scheduler with Android
+      foreground-service behavior where required; respect battery level
+      and quiet hours.
+- [ ] Kill/restart test: process termination recovers keys and replay
+      state from app-private storage (same rule as the guest
+      `GRG1`-magic store load in Phase 4); expired sessions are swept.
+- [ ] Offline gate: clean install -> boot -> SOS/ACK against a local
+      receiver with no internet and no accounts.
 
 ## Phase 11: Gringots Package in Zinux
 
@@ -889,21 +1102,51 @@ Starting gringotsd...
 Gringots installed.
 ```
 
+### Next gates
+
+- [ ] Entry: `gringotsd` running as a userland service through the APK
+      (Phase 5 VM slice) with Wi-Fi SOS/ACK green (Phase 6).
+- [ ] Define the `gringots.vpkg` manifest + capability request
+      (`CAP_GRINGOTS_SEND/RECEIVE`, `CAP_CLOCK`,
+      `CAP_PERSISTENT_STORAGE(gringots)`, `CAP_NETWORK_DATAGRAM` only)
+      against `android/HOST_CAPABILITIES.md`; signature verification
+      before any capability grant.
+- [ ] Replace special-case startup with install/start; the debug console
+      self-test stays as a post-install health check.
+
 ## Final First-Release Definition
 
-The first release is successful when all of the following are demonstrated:
+The first release is successful when all of the following are demonstrated
+(gate in parentheses):
 
-- Android APK installs on the reference phone.
-- APK starts an ARM64 Zinux guest.
-- Zinux starts `gringotsd` as a userland service.
-- Gringots creates a valid signed `CIVILIAN_SOS`.
-- Android Wi-Fi bridge transmits the frame.
-- Independent receiver verifies the frame.
-- Valid `ACK` returns to Zinux.
-- Invalid, expired and replayed frames are rejected.
-- Location is never disclosed without user consent.
-- The system works without a centralized account.
-- The complete test can be repeated from a clean build.
+- Android APK installs on the reference phone. (Phase 5 + Redmi smoke)
+- APK starts an ARM64 Zinux guest. (Phase 5 VM slice)
+- Zinux starts `gringotsd` as a userland service. (Phase 5 VM slice)
+- Gringots creates a valid signed `CIVILIAN_SOS`. (Phase 4 file-shim,
+  then Phase 6 live)
+- Android Wi-Fi bridge transmits the frame. (Phase 6)
+- Independent receiver verifies the frame. (Phase 4 negative suite +
+  Phase 6 live)
+- Valid `ACK` returns to Zinux. (Phase 4 file-shim, then Phase 6 live)
+- Invalid, expired and replayed frames are rejected. (Phase 4 negative
+  suite, re-run against the phone path)
+- Location is never disclosed without user consent. (Phase 7)
+- The system works without a centralized account. (Phase 10 offline gate)
+- The complete test can be repeated from a clean build. (all desktop
+  gates + `build-apk.ps1` from clean `android/build/`)
+
+Close-out order towards the release:
+
+```text
+4b GRINGOTD gaps closed -> 5 VM host + Redmi smoke -> 6 Redmi Wi-Fi SOS/ACK
+    -> 7 consent -> 10 reliability/offline -> 11 vpkg
+    -> S5 Android integration security testing -> release
+```
+
+Phases 8 (BLE) and 9 (audio) are fallback transports: each may land
+after the release transport (Wi-Fi) is green, or be explicitly deferred
+with a recorded reason. Neither may block or bypass the Wi-Fi
+SOS/ACK gate.
 
 ## Explicit Non-Goals for the First Release
 

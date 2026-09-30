@@ -16,6 +16,7 @@ const root = @import("gringots_root");
 const hp = @import("host_protocol");
 const svc_mod = @import("service_ipc");
 const rx_mod = @import("test_receiver");
+const gringotd_mod = @import("bridge");
 const msg = root.msg;
 const frame = root.frame;
 const ed = root.crypto_;

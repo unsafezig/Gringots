@@ -118,6 +118,40 @@ pub fn build(b: *std.Build) void {
     const bridge_tests = b.addTest(.{ .root_module = bridge_mod });
     test_step.dependOn(&b.addRunArtifact(bridge_tests).step);
 
+    // Phase 4 GRINGOTD relay daemon library.
+    const gringotd_mod = b.createModule(.{
+        .root_source_file = b.path("zinux/gringotd/gringotd.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    gringotd_mod.addImport("host_protocol", hp_mod);
+    gringotd_mod.addImport("gringots_root", gringots_root_mod);
+    gringotd_mod.addImport("bridge", bridge_mod);
+    const gringotd_tests = b.addTest(.{ .root_module = gringotd_mod });
+    test_step.dependOn(&b.addRunArtifact(gringotd_tests).step);
+
+    // Phase 5: JNI shared library for the Android APK. The APK bundles
+    // this .so and binds GringotsBridge natives in JNI_OnLoad.
+    const android_query = std.Target.Query{
+        .cpu_arch = .aarch64,
+        .os_tag = .linux,
+        .abi = .android,
+    };
+    const android_target = b.resolveTargetQuery(android_query);
+    const jni_mod = b.createModule(.{
+        .root_source_file = b.path("src/jni.zig"),
+        .target = android_target,
+        .optimize = optimize,
+    });
+    const jni_lib = b.addLibrary(.{
+        .name = "gringots",
+        .root_module = jni_mod,
+        .linkage = .dynamic,
+    });
+    const install_jni = b.addInstallArtifact(jni_lib, .{});
+    const android_step = b.step("android-lib", "Cross-compile libgringots.so for aarch64-linux-android");
+    android_step.dependOn(&install_jni.step);
+
     // Phase 1 smoke: new guest/host code must also compile for
     // aarch64-freestanding (no kernel port yet — compile gate only).
     const aarch64_query = std.Target.Query{
