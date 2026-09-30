@@ -124,9 +124,21 @@ On desktop the "host bridge" is a loopback process:
 
 ```text
 gringotsd (fake bridge) → GUEST_SOS_SEND → desktop bridge
-    → UDP 127.0.0.1:4848 → test_receiver → ACK
+    → UDP 127.0.0.1:48481 → test_receiver → ACK
     → HOST_FRAME_DELIVER → gringotsd.RECEIVE_FRAME → GET_STATUS(acked=true)
 ```
 
 The desktop bridge speaks this exact framing; only the transport under it
 (UDP loopback vs Android Wi-Fi/BLE) differs.
+
+### Canonical desktop ports
+
+| Endpoint | Address | Single source of truth |
+|---|---|---|
+| Receiver network | `127.0.0.1:48481` | `zinux/host_bridge/bridge.zig` `RECEIVER_PORT` |
+| Bridge listener (local `gringotsd` clients) | `127.0.0.1:48482` | `zinux/host_bridge/bridge.zig` `BRIDGE_PORT` |
+
+`zinux/gringotd/gringotd.zig` re-exports both values and must not
+redefine them. The relay's outbound sender binds an ephemeral port —
+never the receiver's port. Unit tests must use ephemeral ports
+(`initOn`); fixed-port binds collide between parallel test binaries.

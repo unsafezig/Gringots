@@ -16,7 +16,7 @@ const root = @import("gringots_root");
 const hp = @import("host_protocol");
 const svc_mod = @import("service_ipc");
 const rx_mod = @import("test_receiver");
-const gringotd_mod = @import("bridge");
+const gringotd = @import("gringotd");
 const msg = root.msg;
 const frame = root.frame;
 const ed = root.crypto_;
@@ -210,4 +210,30 @@ test "negative: host datagram with bad CRC dropped before receiver" {
     @memcpy(bad[0..d.len], d);
     bad[d.len - 1] ^= 0x01;
     try testing.expectError(error.CrcMismatch, hp.decode(bad[0..d.len]));
+}
+
+// Phase 4b: the same loop through the GRINGOTD relay layer (pure path,
+// no sockets). SOS is classified to transmit, the ACK returns wrapped
+// as HOST_FRAME_DELIVER, the guest reports acked.
+test "e2e via gringotd relay: SOS transmits, ACK delivers" {
+    var guest = try svc_mod.Service.init([_]u8{0x0A} ** 32, T0);
+    var rx = try rx_mod.Receiver.init();
+
+    const sos = try guest.createSos(T0);
+    _ = try guest.sendFrame(sos);
+    var up: [hp.MAX_DATAGRAM]u8 = undefined;
+    const up_dgram = try hp.encode(.guest_sos_send, sos, &up);
+    var resp: [hp.MAX_DATAGRAM]u8 = undefined;
+    const a = gringotd.classify(up_dgram, &resp);
+    try testing.expect(a.tag == .transmit);
+    try testing.expectEqualSlices(u8, sos, a.payload);
+
+    var ack_raw: [600]u8 = undefined;
+    try testing.expect(rx.onFrame(a.payload, T0, &ack_raw) == .acked);
+    var down: [hp.MAX_DATAGRAM]u8 = undefined;
+    const down_dgram = try gringotd.relayInbound(ack_raw[0..rx.last_len], &down);
+    const down_msg = try hp.decode(down_dgram);
+    try testing.expect(down_msg.op == .host_frame_deliver);
+    try testing.expect(guest.receiveFrame(down_msg.payload, T0) == .acked);
+    try testing.expect(guest.getStatus().acked);
 }

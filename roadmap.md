@@ -729,75 +729,67 @@ translating a single bridge listener into outbound sender sockets.
 ### Data flow
 
 ```
-Bridge listener on localhost port
+Bridge listener on 127.0.0.1:48482
     ↓ UDP bind
 GRINGOTD relay loop
     ├─→ classify()  -- validation gate
-    ├─→ transmit (send_frame) → sender socket port 48481
-    ├─→ respond   (ACK relay) → forward to client ports
-    └─→ drop      (malformed)
+    ├─→ transmit → sender socket (ephemeral bind) → 127.0.0.1:48481
+    ├─→ respond/drop → no forward, no re-inject (counted as drop)
 ```
+
+`respond` outcomes are deliberately NOT sent through the listener
+socket: that would re-inject our own `HOST_ERROR`/`HOST_STATUS` into
+the receive queue and spin the loop. Client-addressed replies need the
+sender's source address and are a follow-up (see next gates).
 
 ### Implementation record
 
-- `zinux/gringotd/gringotd.zig` created (uncommitted slice):
-  - `GringotdRelay` struct owning a bridge listener socket and an external
-    sender socket.
-  - `init()` binds both sockets; `close()` tears them down.
-  - `classify(raw, out_buf)` performs validation and produces a
-    validated datagram copy when allowed; mirrors `bridge.classify`
-    so the daemon layer decides forward / respond / drop.
-  - `relayOne(payload)` dispatches the classification to `tx()`, a
-    wrapped outbound frame via `forwardToReceiver()`, or silently drops
-    (malformed).
-  - `relayInbound(raw, out_buf) !bool` accepts decoded inbound frames from
-    the receiver network and wraps them for delivery back to connected
-    clients on the bridge listener port.
+- `zinux/gringotd/gringotd.zig`:
+  - `GringotdRelay` owning a bridge listener socket and an
+    ephemerally-bound sender (the sender must never claim the
+    receiver's port).
+  - `init()` (canonical ports) / `initOn(br, ext)` (explicit addrs;
+    tests pass ephemeral); `close()` tears down.
+  - `classify(raw, out_buf)` mirrors `bridge.classify`: forward /
+    respond / drop.
+  - `relayOne(data) !bool`: transmits toward the receiver network,
+    returns true iff forwarded; send failures propagate to the loop,
+    which counts them as drops and keeps running (never unwinds).
+  - `relayInbound(payload, out_buf) ![]u8`: delegated to
+    `bridge.wrapInbound` — valid Gringots bytes become
+    `HOST_FRAME_DELIVER`, anything else `HOST_ERROR(BAD_PAYLOAD)`.
 
-- `build.zig` updated:
-  - Registers `gringotd` module pointing at
-    `zinux/gringotd/gringotd.zig`.
-  - Adds test entry-point file under `tests/host_bridge/`
-    (`e2e_sos_ack.zig`) so the relay can be tested alongside Phase-4
-    bridge tests.
+- `build.zig`: registers the `gringotd` module; `e2e_sos_ack.zig`
+  imports the real `gringotd` module (stray `bridge` alias removed).
 
-- Tests:
-  - New `classify: forward SOS payload via relayOne` host test
-    validates framing, CRC and version checks; malformed datagrams are
-    rejected before they reach `relayLoop`.
-  - All existing e2e and protocol tests continue to pass.
+- Tests (all green, repeat runs):
+  - `classify` forwards a real SOS payload byte-for-byte; drops
+    unparseable framing; answers wrong-direction/bad-payload/valid
+    status requests with decodable `HOST_ERROR`/`HOST_STATUS_RESP`.
+  - `relayInbound` round-trips a real receiver-minted ACK to a guest
+    `acked` status; non-frame bytes become `HOST_ERROR`.
+  - `e2e via gringotd relay`: SOS -> classify/transmit -> receiver ->
+    ACK -> relayInbound -> guest `acked`.
+  - Socket lifecycle (`initOn`/close) on ephemeral ports only.
 
-### Known gaps in the uncommitted slice (must be closed before green)
-
-- `relayOne` uses `try` on socket sends but is not fallible (`bool`
-  return): make it `!bool` or map send errors to drop/error counters.
-  A send failure must never unwind the relay loop.
-- `relayInbound` copies `m.payload` into `out_buf` today; define whether
-  the contract is "re-emit the full `HOST_FRAME_DELIVER` datagram" or
-  "payload only", and add a host test that round-trips a real ACK.
-- `tests/host_bridge/e2e_sos_ack.zig` carries a stray
-  `const gringotd_mod = @import("bridge");` (wrong module, unused):
-  wire the e2e to the real `gringotd` module or delete the import.
-- Port table in code is receiver `127.0.0.1:48481`, bridge
-  `127.0.0.1:48482` (`zinux/host_bridge/bridge.zig`
-  `RECEIVER_PORT`/`BRIDGE_PORT`). The `48490` value drafted below was
-  never in code — canonicalize on `48481`/`48482` in `HOST_PROTOCOL.md`.
-- Typo sweep: `GringodRelay` -> `GringotdRelay`, `GRINGODT`/`GRINGTD` ->
-  `GRINGOTD`.
+- Test-isolation rule (found by a real failure): the first slice bound
+  fixed ports in its unit test and failed at `bind` whenever the bridge
+  test binary ran in parallel. Fixed ports are production-only;
+  `HOST_PROTOCOL.md` Section 6 documents the canonical table
+  (receiver `127.0.0.1:48481`, bridge `127.0.0.1:48482`) and the
+  ephemeral-port test rule.
 
 ### Next gates for GRINGOTD
 
-- [ ] Close the known gaps above (`relayOne` fallibility, `relayInbound`
-      contract + test, stray e2e import, `GringotdRelay` rename).
+- [x] Close the known gaps (`relayOne` fallibility, `relayInbound`
+      contract + test, stray e2e import, `GringotdRelay` rename, ports).
 - [ ] Wire up multiple sender sockets so each receiver subnet can be reached
       independently (initially loopback: one socket to `127.0.0.1:48481`).
-- [ ] Test relay inbound path end-to-end — ACK frames minted by the
-      standalone receiver must traverse GRINGOTD back to the client bridge
-      listener.
+- [ ] Client-addressed replies: pass the datagram source address from
+      `relayLoop` to the respond path so `HOST_STATUS_RESP` /
+      `HOST_ERROR` reach the requesting client instead of being dropped.
 - [ ] Add watchdog / liveness markers so `gringotsd` or other clients can
       detect when the bridge socket is healthy.
-- [ ] Document port assignments (bridge: 48482, receiver: 48481) in
-      `HOST_PROTOCOL.md` as the canonical Zinux datagram ports.
 
 ## Phase 5: Android APK and VM Host
 
@@ -859,8 +851,7 @@ The native embedding path is proven; the VM host is not yet started:
   (gitignored via `.gitignore`). Gate checks badging
   (`ee.vaino.gringots`, `native-code: 'arm64-v8a'`) and cert verify.
 - `android/HOST_CAPABILITIES.md`, `android/CONSENT_FLOW.md` (committed
-  drafts, normative for Phases 5-7). `android/README.md` still says
-  "No APK sources yet" — stale after this slice, update on commit.
+  drafts, normative for Phases 5-7).
 
 ### Phase 5 gate commands
 
@@ -872,7 +863,6 @@ Gringots/android/build-apk.ps1   # requires ANDROID_HOME SDK 35
 
 ### Phase 5 next gates (VM host slice, not started)
 
-- [ ] Update `android/README.md` (APK sources now exist).
 - [ ] Bundle the Zinux ARM64 guest image in the APK; start/stop the
       guest VM or emulator from the debug console; allocate guest
       memory; connect virtual serial, storage and datagram devices;

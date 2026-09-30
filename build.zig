@@ -93,18 +93,6 @@ pub fn build(b: *std.Build) void {
     const rx_tests = b.addTest(.{ .root_module = rx_mod });
     test_step.dependOn(&b.addRunArtifact(rx_tests).step);
 
-    const e2e_mod = b.createModule(.{
-        .root_source_file = b.path("tests/host_bridge/e2e_sos_ack.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    e2e_mod.addImport("host_protocol", hp_mod);
-    e2e_mod.addImport("service_ipc", svc_ipc_mod);
-    e2e_mod.addImport("test_receiver", rx_mod);
-    e2e_mod.addImport("gringots_root", gringots_root_mod);
-    const e2e_tests = b.addTest(.{ .root_module = e2e_mod });
-    test_step.dependOn(&b.addRunArtifact(e2e_tests).step);
-
     // Phase 4 desktop bridge: same framing over UDP loopback.
     const bridge_mod = b.createModule(.{
         .root_source_file = b.path("zinux/host_bridge/bridge.zig"),
@@ -118,17 +106,31 @@ pub fn build(b: *std.Build) void {
     const bridge_tests = b.addTest(.{ .root_module = bridge_mod });
     test_step.dependOn(&b.addRunArtifact(bridge_tests).step);
 
-    // Phase 4 GRINGOTD relay daemon library.
+    // Phase 4b GRINGOTD relay daemon library.
     const gringotd_mod = b.createModule(.{
         .root_source_file = b.path("zinux/gringotd/gringotd.zig"),
         .target = target,
         .optimize = optimize,
     });
     gringotd_mod.addImport("host_protocol", hp_mod);
-    gringotd_mod.addImport("gringots_root", gringots_root_mod);
+    gringotd_mod.addImport("service_ipc", svc_ipc_mod);
+    gringotd_mod.addImport("test_receiver", rx_mod);
     gringotd_mod.addImport("bridge", bridge_mod);
     const gringotd_tests = b.addTest(.{ .root_module = gringotd_mod });
     test_step.dependOn(&b.addRunArtifact(gringotd_tests).step);
+
+    const e2e_mod = b.createModule(.{
+        .root_source_file = b.path("tests/host_bridge/e2e_sos_ack.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    e2e_mod.addImport("host_protocol", hp_mod);
+    e2e_mod.addImport("service_ipc", svc_ipc_mod);
+    e2e_mod.addImport("test_receiver", rx_mod);
+    e2e_mod.addImport("gringots_root", gringots_root_mod);
+    e2e_mod.addImport("gringotd", gringotd_mod);
+    const e2e_tests = b.addTest(.{ .root_module = e2e_mod });
+    test_step.dependOn(&b.addRunArtifact(e2e_tests).step);
 
     // Phase 5: JNI shared library for the Android APK. The APK bundles
     // this .so and binds GringotsBridge natives in JNI_OnLoad.
