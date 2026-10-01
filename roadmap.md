@@ -783,13 +783,24 @@ sender's source address and are a follow-up (see next gates).
 
 - [x] Close the known gaps (`relayOne` fallibility, `relayInbound`
       contract + test, stray e2e import, `GringotdRelay` rename, ports).
-- [ ] Wire up multiple sender sockets so each receiver subnet can be reached
-      independently (initially loopback: one socket to `127.0.0.1:48481`).
-- [ ] Client-addressed replies: pass the datagram source address from
-      `relayLoop` to the respond path so `HOST_STATUS_RESP` /
-      `HOST_ERROR` reach the requesting client instead of being dropped.
-- [ ] Add watchdog / liveness markers so `gringotsd` or other clients can
-      detect when the bridge socket is healthy.
+- [x] Multiple receiver targets: `GringotdRelay` fans one SOS out to
+      every `addTarget` address (max 4, `TargetsFull` fails closed;
+      production: canonical `127.0.0.1:48481`). One loopback socket
+      reaches all loopback targets; per-subnet sockets plug into the
+      same list with the Wi-Fi/BLE transports.
+- [x] Client-addressed replies: `relayOneFrom(data, source)` answers
+      `HOST_STATUS_RESP` / `HOST_ERROR` to the datagram source via the
+      listener socket; `relayLoop` passes `im.from`. Sourceless
+      `relayOne` keeps the old drop-respond rule (no self-injection).
+- [x] Watchdog / liveness: `RelayStats{forwarded, responded, dropped,
+      send_fail}` + `healthy()` + `statusReport()` (`HOST_STATUS_RESP`,
+      never an ACK). Send failures count as drops, loop never unwinds.
+- [x] `HOST_TIME_SYNC` (`0x07`) codec in `host_protocol.zig`
+      (`encodeTimeSync` / `decodeTimeSync`); guest-direction `0x07`
+      gets `HOST_ERROR(BAD_DIRECTION)`.
+- [ ] Per-subnet sender sockets (Wi-Fi broadcast vs loopback) when the
+      Android transport lands — addresses today, (socket, target)
+      pairs then.
 
 ## Phase 5: Android APK and VM Host
 

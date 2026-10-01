@@ -142,3 +142,30 @@ The desktop bridge speaks this exact framing; only the transport under it
 redefine them. The relay's outbound sender binds an ephemeral port —
 never the receiver's port. Unit tests must use ephemeral ports
 (`initOn`); fixed-port binds collide between parallel test binaries.
+The relay's own socket tests use test-only ports `48881`–`48887`
+(never the canonical pair) so they stay hermetic while the desktop
+bridge tests listen on the canonical ports in a sibling binary.
+
+### GRINGOTD relay behavior (Phase 4b)
+
+* Fan-out: the relay holds up to `MAX_TARGETS` (4) receiver addresses.
+  Production configures the single canonical receiver; each subnet gets
+  its own target entry. One loopback socket already reaches every
+  loopback target — per-subnet sockets arrive with the Wi-Fi/BLE
+  transports, which plug a (socket, target) pair into the same list.
+* Client replies: `relayOne` (no source) still drops `respond`
+  outcomes so the loop can never re-inject its own `HOST_ERROR` /
+  `HOST_STATUS_RESP`. `relayOneFrom(data, source)` answers them to the
+  datagram source via the listener socket; `relayLoop` always passes
+  `im.from`. `transmit` outcomes never reply — the ACK returns later
+  through `relayInbound`.
+* Liveness: `RelayStats{forwarded, responded, dropped, send_fail}` plus
+  `healthy()` (sockets bound) and `statusReport()` (encodes
+  `HOST_STATUS_RESP(not-acked, 0)` — alive, never an ACK proof).
+  Send failures count as drops; the loop never unwinds on them.
+
+### Time-sync codec
+
+`HOST_TIME_SYNC` (`0x07`) carries `wall:8B BE (unix seconds)`.
+`host_protocol.zig` provides `encodeTimeSync` / `decodeTimeSync`;
+a guest-direction `0x07` datagram is answered `HOST_ERROR(BAD_DIRECTION)`.

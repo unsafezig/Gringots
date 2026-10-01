@@ -22,6 +22,7 @@ pub const Op = enum(u8) {
     host_status_resp = 0x04,
     host_error = 0x05,
     host_consent_decision = 0x06,
+    host_time_sync = 0x07,
     _,
 
     pub fn name(self: Op) []const u8 {
@@ -32,6 +33,7 @@ pub const Op = enum(u8) {
             .host_status_resp => "HOST_STATUS_RESP",
             .host_error => "HOST_ERROR",
             .host_consent_decision => "HOST_CONSENT_DECISION",
+            .host_time_sync => "HOST_TIME_SYNC",
             else => "UNKNOWN",
         };
     }
@@ -141,6 +143,20 @@ pub fn decodeConsent(payload: []const u8) !struct { req_id: u32, approve: bool, 
     };
 }
 
+/// Time-sync payload: wall(8BE unix seconds). Host -> guest only;
+/// the guest applies the onWallTime rotation contract, never rewinds
+/// trust (see HOST_PROTOCOL.md Section 7).
+pub fn encodeTimeSync(wall: u64, out: []u8) ![]u8 {
+    var p: [8]u8 = undefined;
+    std.mem.writeInt(u64, p[0..][0..8], wall, .big);
+    return encode(.host_time_sync, &p, out);
+}
+
+pub fn decodeTimeSync(payload: []const u8) !u64 {
+    if (payload.len != 8) return error.BadPayload;
+    return std.mem.readInt(u64, payload[0..][0..8], .big);
+}
+
 const testing = std.testing;
 
 test "round-trip all ops" {
@@ -188,4 +204,17 @@ test "gringots payload length gate" {
     try testing.expectError(error.BadPayload, checkGringotsPayload(&[_]u8{0} ** 600));
     try checkGringotsPayload(&[_]u8{0} ** 150);
     try checkGringotsPayload(&[_]u8{0} ** 521);
+}
+
+test "time sync codec round-trips wall time" {
+    var buf: [MAX_DATAGRAM]u8 = undefined;
+    const wall: u64 = 1798675200 + 12 * 3600;
+    const d = try encodeTimeSync(wall, &buf);
+    const m = try decode(d);
+    try testing.expect(m.op == .host_time_sync);
+    try testing.expectEqualStrings("HOST_TIME_SYNC", m.op.name());
+    try testing.expectEqual(wall, try decodeTimeSync(m.payload));
+    // Wrong length is not a wall time.
+    try testing.expectError(error.BadPayload, decodeTimeSync(&[_]u8{0} ** 7));
+    try testing.expectError(error.BadPayload, decodeTimeSync(&[_]u8{0} ** 9));
 }
