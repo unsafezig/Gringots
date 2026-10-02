@@ -137,6 +137,7 @@ The desktop bridge speaks this exact framing; only the transport under it
 |---|---|---|
 | Receiver network | `127.0.0.1:48481` | `zinux/host_bridge/bridge.zig` `RECEIVER_PORT` |
 | Bridge listener (local `gringotsd` clients) | `127.0.0.1:48482` | `zinux/host_bridge/bridge.zig` `BRIDGE_PORT` |
+| Emulator live-loop receiver (test-only) | `127.0.0.1:48483` (emulator sends to `10.0.2.2:48483`) | `zinux/emulator_rx/receiver_udp.zig` `LIVE_PORT` |
 
 `zinux/gringotd/gringotd.zig` re-exports both values and must not
 redefine them. The relay's outbound sender binds an ephemeral port —

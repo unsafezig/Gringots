@@ -14,6 +14,15 @@
 //! of the underlying calls is covered by `ffi.zig` host tests.
 
 const ffi = @import("ffi.zig");
+const hp = @import("host_protocol");
+
+// Local getauxval (src/android_auxv.zig): resolves Zig libc startup's
+// reference at static link time, since Bionic cannot be linked without an
+// NDK sysroot. The comptime touch keeps the export in the shared object.
+const auxv = @import("android_auxv.zig");
+comptime {
+    _ = auxv.getauxval;
+}
 
 pub const JNI_VERSION_1_6: i32 = 0x00010006;
 pub const JNI_ERR: i32 = -1;
@@ -93,11 +102,58 @@ fn jni_verify(env: Env, _: *anyopaque, frame_arr: *anyopaque, now: i64) callconv
     return ffi.gringots_verify_frame(&buf, @intCast(len), @bitCast(now));
 }
 
+/// describeFrame([B)[B — debug text bytes, null on any failure.
+fn jni_describe(env: Env, _: *anyopaque, frame_arr: *anyopaque) callconv(.c) ?*anyopaque {
+    const len = getArrayLength(env, frame_arr);
+    if (len <= 0 or len > 1024) return null;
+    var buf: [1024]u8 = undefined;
+    getByteArrayRegion(env, frame_arr, 0, len, &buf);
+    var out: [512]u8 = undefined;
+    const n = ffi.gringots_describe(&buf, @intCast(len), &out, 512);
+    if (n <= 0 or n > 512) return null;
+    const arr = newByteArray(env, @intCast(n)) orelse return null;
+    setByteArrayRegion(env, arr, 0, @intCast(n), &out);
+    return arr;
+}
+
 const methods = [_]JNINativeMethod{
     .{ .name = "version", .signature = "()I", .fn_ptr = @ptrCast(&jni_version) },
     .{ .name = "makeSos", .signature = "([BJJ[B)[B", .fn_ptr = @ptrCast(&jni_make_sos) },
     .{ .name = "verifyFrame", .signature = "([BJ)I", .fn_ptr = @ptrCast(&jni_verify) },
+    .{ .name = "describeFrame", .signature = "([B)[B", .fn_ptr = @ptrCast(&jni_describe) },
+    .{ .name = "wrapSos", .signature = "([B)[B", .fn_ptr = @ptrCast(&jni_wrap_sos) },
+    .{ .name = "unwrapDeliver", .signature = "([B)[B", .fn_ptr = @ptrCast(&jni_unwrap_deliver) },
 };
+
+/// wrapSos([B)[B — GUEST_SOS_SEND datagram bytes, null on any failure.
+fn jni_wrap_sos(env: Env, _: *anyopaque, sos_arr: *anyopaque) callconv(.c) ?*anyopaque {
+    const len = getArrayLength(env, sos_arr);
+    if (len <= 0 or len > hp.MAX_PAYLOAD) return null;
+    var sos: [hp.MAX_PAYLOAD]u8 = undefined;
+    getByteArrayRegion(env, sos_arr, 0, len, &sos);
+    const slen: usize = @intCast(len);
+    hp.checkGringotsPayload(sos[0..slen]) catch return null;
+    var out: [hp.MAX_DATAGRAM]u8 = undefined;
+    const dg = hp.encode(.guest_sos_send, sos[0..slen], &out) catch return null;
+    const arr = newByteArray(env, @intCast(dg.len)) orelse return null;
+    setByteArrayRegion(env, arr, 0, @intCast(dg.len), dg.ptr);
+    return arr;
+}
+
+/// unwrapDeliver([B)[B — HOST_FRAME_DELIVER payload bytes, null otherwise
+/// (HOST_ERROR and anything else mean "no acknowledgement").
+fn jni_unwrap_deliver(env: Env, _: *anyopaque, dg_arr: *anyopaque) callconv(.c) ?*anyopaque {
+    const len = getArrayLength(env, dg_arr);
+    if (len <= 0 or len > hp.MAX_DATAGRAM) return null;
+    var buf: [hp.MAX_DATAGRAM]u8 = undefined;
+    getByteArrayRegion(env, dg_arr, 0, len, &buf);
+    const ulen: usize = @intCast(len);
+    const m = hp.decode(buf[0..ulen]) catch return null;
+    if (m.op != .host_frame_deliver) return null;
+    const arr = newByteArray(env, @intCast(m.payload.len)) orelse return null;
+    setByteArrayRegion(env, arr, 0, @intCast(m.payload.len), m.payload.ptr);
+    return arr;
+}
 
 /// JNI_OnLoad: bind GringotsBridge natives, report 1.6.
 export fn JNI_OnLoad(vm: Vm, _: ?*anyopaque) i32 {
